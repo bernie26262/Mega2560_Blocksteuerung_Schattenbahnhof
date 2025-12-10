@@ -1,0 +1,49 @@
+Pin	Name	Sensornummer	Name in nicht-oop-Programm
+2	W12 gerade		const int relay_outWeicheSBhf1Straight = 2;
+3	W12 Abbiegen		const int relay_outWeicheSBhf1Turn = 3;
+4	W13 gerade		const int relay_outWeicheSBhf2Straight = 4;
+5	W13 Abbiegen		const int relay_outWeicheSBhf2Turn = 5;
+6	W14 gerade		const int relay_outWeicheSBhf3Straight = 6;
+7	W14 Abbiegen		const int relay_outWeicheSBhf3Turn = 7;
+8	W15 gerade		const int relay_outWeicheSBhf4Straight = 8;
+9	W15 Abbiegen		const int relay_outWeicheSBhf4Turn = 9;
+22	Kontaktgleis Block 1	S21	#define kontaktGlBlock1 22
+23	Kontaktgleis Block 2	S24	#define kontaktGlBlock2 23
+24	Kontaktgleis Block 3	S25	#define kontaktGlBlock3 24
+25	Kontaktgleis Block 4	S17 und S20	#define kontaktGlBlock4 25
+26	Kontaktgleis Block 5	S26	#define kontaktGlBlock5 26
+27	Kontaktgleis Block Schattenbahnhof Gleis 1	S27	#define kontaktGlSBhfGl1 27
+28	Kontaktgleis Block Schattenbahnhof Gleis 2	S28	#define kontaktGlSBhfGl2 28
+29	Kontaktgleis Block Schattenbahnhof Gleis 3	S29	#define kontaktGlSBhfGl3 29
+30	Kontaktgleis Block 6	S31	#define kontaktGlBlock6 30
+31	Schaltgleis S11	S11	#define schaltgleisSBhf0 31
+32	Schaltgleis S12	S12	#define schaltgleisSBhf1 32
+33	Schaltgleis S13	S13	#define schaltgleisSBhf2 33
+34	Schaltgleis S14	S14	#define schaltgleisSBhf3 34
+35	Schaltgleis S15	S15	#define schaltgleisSBhf4 35
+36	Schaltgleis S16	S16	#define schaltgleisSBhf5 36
+37	W12 Rückmelder Abbiegen		#define LEDWRMSBhf1Turn 37
+38	W13 Rückmelder Abbiegen		#define LEDWRMSBhf2Turn 38
+39	W14 Rückmelder Abbiegen		#define LEDWRMSBhf3Turn 39
+40	W15 Rückmelder Abbiegen		#define LEDWRMSBhf4Turn 40
+43	Relais Stromgleis Block 1 nach 2		const int relay_outStromGlBlock1nach2 = 43;
+44	Relais Stromgleis Block 2 nach 3		const int relay_outStromGlBlock2nach3 = 44;
+45	Relais Stromgleis Block 3 nach 4		const int relay_outStromGlBlock3nach4 = 45;
+46	Relais Stromgleis Block 4 nach 1		const int relay_outStromGlBlock4nach1 = 46;
+47	Relais Stromgleis Block 4 nach 5		const int relay_outStromGlBlock4nach5 = 47;
+48	Relais Stromgleis Block 5 nach Schattenbahnhof		const int relay_outStromGlBlock5nachSBhf = 48;
+49	Relais Stromgleis Block Schattenbahnhof Gleis 1 nach 6		const int relay_outStromGlSBhfGl1nach6 = 49;
+50	Relais Stromgleis Block Schattenbahnhof Gleis 2 nach 6		const int relay_outStromGlSBhfGl2nach6 = 50;
+51	Relais Stromgleis Block Schattenbahnhof Gleis 3 nach 6		const int relay_outStromGlSBhfGl3nach6 = 51;
+52	Relais Stromgleis Nothalt		const int relay_outStromGlNothalt = 52;
+53	Relais Stromgleis Block 6 nach 4		const int relay_outStromGlBlock6nach4 = 53;
+A0	Stromsensor Block 1		#define ADC_INPUTBlock1 A0     // define the used ADC input channel
+A1	Stromsensor Block 2		#define ADC_INPUTBlock2 A1     
+A2	Stromsensor Block 3		#define ADC_INPUTBlock3 A2     
+A3	Stromsensor Block 4		#define ADC_INPUTBlock4 A3
+A4	Stromsensor Block 5		#define ADC_INPUTBlock5 A4     
+A5	Stromsensor Block Schattenbahnhof Gleis 1		#define ADC_INPUTSBhfGl1 A5     
+A6	Stromsensor Block Schattenbahnhof Gleis 2		#define ADC_INPUTSBhfGl2 A6 
+A7	Stromsensor Block Schattenbahnhof Gleis 3		#define ADC_INPUTSBhfGl3 A7   
+A8	Stromsensor Block 6		#define ADC_INPUTBlock6 A8
+19	Kontaktgleis Nothalt	S30	NEU!!!
