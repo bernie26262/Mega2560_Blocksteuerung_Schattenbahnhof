@@ -1,16 +1,15 @@
 #pragma once
 #include <Arduino.h>
-#include "SensorKontakt.h"
-#include "SensorStrom.h"
+
+class SensorKontakt;
+class SensorStrom;
 
 class Block {
-
 public:
-    Block(uint8_t id,
-          SensorKontakt* mainKontakt,
-          SensorStrom* strom,
-          SensorKontakt* bhf1 = nullptr,
-          SensorKontakt* bhf2 = nullptr);
+    Block(uint8_t id, SensorKontakt* kontakt, SensorKontakt* bhf1,
+          SensorKontakt* bhf2, SensorStrom* strom)
+        : m_id(id), m_mainKontakt(kontakt),
+          m_bhf1(bhf1), m_bhf2(bhf2), m_strom(strom) {}
 
     void begin();
     void update(uint32_t now);
@@ -18,21 +17,14 @@ public:
     bool besetzt() const;
     bool frei() const { return !besetzt(); }
 
-    uint8_t id() const { return m_id; }
-
-    void setBesetztSim(bool v);
-    void clearSimOverride();
-
-private:
-    uint8_t        m_id;
+    uint16_t strom_mA() const;
 
     SensorKontakt* m_mainKontakt;
-    SensorStrom*   m_strom;
     SensorKontakt* m_bhf1;
     SensorKontakt* m_bhf2;
 
-    bool m_currentBesetzt = false;
-
-    bool m_simOverride      = false;
-    bool m_simOverrideValid = false;
+private:
+    uint8_t m_id;
+    SensorStrom* m_strom;
+    bool m_isOccupied = false;
 };

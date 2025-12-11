@@ -26,9 +26,16 @@ public:
     void setSim(Stellung s);
     void clearSim();
 
+    inline void setGerade() {
+        schalte(GERADE);
+    }
+
+    inline void setAbzweig() {
+        schalte(ABBIEGEN);
+    }
+
 private:
     uint8_t m_id;
-
     uint8_t m_pinGerade;
     uint8_t m_pinAbbiegen;
 
@@ -36,8 +43,7 @@ private:
 
     Stellung m_stellung = GERADE;
     Stellung m_sim      = GERADE;
-
-    bool m_simValid = false;
+    bool m_simValid     = false;
 
     enum Phase {
         IDLE,

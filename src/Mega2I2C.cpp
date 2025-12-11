@@ -1,34 +1,23 @@
 #include "Mega2I2C.h"
+#include "mega2_pins.h"
+#include "proto_mega2.h"
 
-#include <Wire.h>
-#include "config.h"
+extern Mega2Payload g_payload;
 
-#include "core/proto_common.h"
-#include "core/proto_mega2.h"
+void megaI2C_begin()
+{
+    Wire.begin(0x12); // I2C-Adresse Mega2
+    Wire.onRequest([]() {
+        Wire.write((uint8_t*)&g_payload, sizeof(g_payload));
+    });
 
-extern Mega2StatusPayload g_payload;
-extern volatile bool g_payloadDirty;
-
-static void onI2CRequest();
-
-void megaI2C_begin() {
-    pinMode(PIN_I2C_INT, OUTPUT);
-    digitalWrite(PIN_I2C_INT, LOW);
-
-    Wire.begin(I2C_SLAVE_ADDR);
-    Wire.onRequest(onI2CRequest);
+    pinMode(PIN_DATA_READY_M2, OUTPUT);
+    digitalWrite(PIN_DATA_READY_M2, LOW);
 }
 
-void megaI2C_update() {
-    digitalWrite(PIN_I2C_INT, g_payloadDirty ? HIGH : LOW);
-}
-
-static void onI2CRequest() {
-    uint8_t buffer[PROTO_MAX_FRAME_SIZE];
-    size_t len = buildMega2StatusFrame(buffer, g_payload);
-
-    Wire.write(buffer, len);
-
-    g_payloadDirty = false;
-    digitalWrite(PIN_I2C_INT, LOW);
+void megaI2C_update()
+{
+    digitalWrite(PIN_DATA_READY_M2, HIGH);
+    delayMicroseconds(200);
+    digitalWrite(PIN_DATA_READY_M2, LOW);
 }
