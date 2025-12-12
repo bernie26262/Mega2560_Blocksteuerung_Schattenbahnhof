@@ -15,9 +15,8 @@ public:
 
     uint8_t count() const { return m_count; }
 
-    // Status-API (Stub, Logik folgt später)
-    bool     isOccupied(uint8_t) const { return false; }
-    uint16_t stromFiltered(uint8_t) const { return 0; }
+    bool     isOccupied(uint8_t id) const;
+    uint16_t stromFiltered(uint8_t id) const;
 
 private:
     Block**  m_blocks;   // interner Besitz, kein Zugriff von außen
