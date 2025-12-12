@@ -19,6 +19,7 @@
 #include "Mega2I2C.h"
 
 #include "proto_mega2.h"
+#include "safety.h"
 
 // ============================================================================
 // GLOBALE OBJEKTE
@@ -26,7 +27,11 @@
 
 // --------------------- BLOCKS -----------------------------------------------
 Block* g_blocks[16];
-BlockController g_bc(g_blocks);
+BlockController g_bc(g_blocks, 16);
+
+// genau EINMAL definieren
+BlockController      blockController;
+ShadowYardController shadowController(&blockController);
 
 // --------------------- POWER CONTROL ----------------------------------------
 Mega2PowerControl g_power;
@@ -65,19 +70,19 @@ void initBlocks()
 {
     g_blocks[0] = nullptr; // unbenutzt
 
-    g_blocks[1] = new Block(1, &k_block1, nullptr, nullptr, &strom1);
-    g_blocks[2] = new Block(2, &k_block2, &k_bhf2a, &k_bhf2b, &strom2);
-    g_blocks[3] = new Block(3, &k_block3, nullptr, nullptr, &strom3);
+    g_blocks[1] = new Block(1, &k_block1, &strom1);
+    g_blocks[2] = new Block(2, &k_block2, &strom2, &k_bhf2a, &k_bhf2b);
+    g_blocks[3] = new Block(3, &k_block3, &strom3);
 
-    g_blocks[4] = new Block(4, &k_block4, &k_bhf4a, &k_bhf4b, &strom4);
+    g_blocks[4] = new Block(4, &k_block4, &strom4, &k_bhf4a, &k_bhf4b);
 
-    g_blocks[5] = new Block(5, &k_block5, nullptr, nullptr, &strom5);
-    g_blocks[6] = new Block(6, &k_block6, nullptr, nullptr, &strom6);
+    g_blocks[5] = new Block(5, &k_block5, &strom5);
+    g_blocks[6] = new Block(6, &k_block6, &strom6);
 
     // SBHF-Gleise (7,8,9)
-    g_blocks[7] = new Block(7, &k_sbhf1, nullptr, nullptr, &stromSbhf1);
-    g_blocks[8] = new Block(8, &k_sbhf2, nullptr, nullptr, &stromSbhf2);
-    g_blocks[9] = new Block(9, &k_sbhf3, nullptr, nullptr, &stromSbhf3);
+    g_blocks[7] = new Block(7, &k_sbhf1, &stromSbhf1);
+    g_blocks[8] = new Block(8, &k_sbhf2, &stromSbhf2);
+    g_blocks[9] = new Block(9, &k_sbhf3, &stromSbhf3);
 
     for (int i = 1; i <= 9; i++)
         g_blocks[i]->begin();
@@ -105,12 +110,7 @@ Weiche w15(15, PIN_W15_GERADE, PIN_W15_ABBIEGEN, &sensorW15);
 Weiche* g_weichen[4] = { &w12, &w13, &w14, &w15 };
 
 // --------------------- SHADOW YARD CONTROLLER -------------------------------
-ShadowYardController g_sbhf(
-    &g_bc,
-    &w12, &w13, &w14, &w15,
-    &g_power,
-    &g_s11, &g_s12, &g_s13, &g_s14, &g_s15, &g_s16
-);
+ShadowYardController g_sbhf(&g_bc);
 
 // --------------------- GLOBAL PAYLOAD ---------------------------------------
 Mega2Payload g_payload;
@@ -172,7 +172,7 @@ void setup()
     initBlocks();
 
     // Hauptcontroller
-    g_bc.begin();
+    
     g_power.begin();
     g_sbhf.begin();
 
@@ -185,6 +185,7 @@ void setup()
 
     // I2C + DataReady
     megaI2C_begin();
+    safetyBegin();
 }
 
 

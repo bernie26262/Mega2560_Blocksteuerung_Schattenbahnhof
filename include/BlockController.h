@@ -1,25 +1,35 @@
 #pragma once
-#include <Arduino.h>
-#include "Block.h"
 
-class BlockController {
+#include <Arduino.h>   // <-- WICHTIG: uint8_t, uint32_t, nullptr
+
+class Block;           // <-- Forward Declaration (zwingend!)
+
+class BlockController
+{
 public:
-    BlockController(Block** blocks) : m_blocks(blocks) {}
+    // Default-Konstruktor für globale Instanzen
+    BlockController() : m_blocks(nullptr), m_count(0) {}
 
-    void begin();
-    void update(uint32_t now);
+    // Konstruktor mit Block-Array
+    explicit BlockController(Block** blocks, uint8_t count)
+        : m_blocks(blocks), m_count(count) {}
 
-    Block* block(uint8_t idx) const { return m_blocks[idx]; }
+    // Nur Deklaration! (Implementierung in .cpp)
+    void update(uint32_t nowMs);
 
-    uint8_t countZuegeOben() const;
-    bool canFahren_3_nach_4() const;
-    bool canFahren_4_nach_oben() const;
+    uint8_t count() const { return m_count; }
 
-    bool m_trafoObenOn = true;
-    bool m_trafoUntenOn = true;
+    // 🔧 TEMPORÄR für Alt-Code
+    Block* block(uint8_t id) const
+    {
+        return m_blocks ? m_blocks[id] : nullptr;
+    }
 
-    Block** blocks = m_blocks;
+    // Status-API (Stub, keine Logik)
+    bool     isOccupied(uint8_t) const { return false; }
+    uint16_t stromFiltered(uint8_t) const { return 0; }
 
 private:
-    Block** m_blocks;
+    Block**  m_blocks;
+    uint8_t m_count;
 };
