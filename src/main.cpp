@@ -29,9 +29,8 @@
 Block* g_blocks[16];
 BlockController g_bc(g_blocks, 16);
 
-// genau EINMAL definieren
-BlockController      blockController;
-ShadowYardController shadowController(&blockController);
+// Legacy-Alias für bestehende Module
+BlockController& blockController = g_bc;
 
 // --------------------- POWER CONTROL ----------------------------------------
 Mega2PowerControl g_power;
@@ -112,6 +111,9 @@ Weiche* g_weichen[4] = { &w12, &w13, &w14, &w15 };
 // --------------------- SHADOW YARD CONTROLLER -------------------------------
 ShadowYardController g_sbhf(&g_bc);
 
+// Legacy-Alias für bestehende Module
+ShadowYardController& shadowController = g_sbhf;
+
 // --------------------- GLOBAL PAYLOAD ---------------------------------------
 Mega2Payload g_payload;
 
@@ -140,6 +142,8 @@ void setup()
     while (!Serial && millis() < 1000) {}
 
     Serial.println(F("\n=== Mega2 Schattenbahnhof startet ==="));
+
+    safetyBegin();
 
     // Kontaktgleise setup
     k_block1.begin();
@@ -185,7 +189,7 @@ void setup()
 
     // I2C + DataReady
     megaI2C_begin();
-    safetyBegin();
+    
 }
 
 
@@ -195,6 +199,8 @@ void setup()
 void loop()
 {
     uint32_t now = millis();
+
+    safetyUpdate();
 
     // ---------- BLOCKS ----------
     if (now - lastBlockUpdate >= BLOCK_UPDATE_MS)

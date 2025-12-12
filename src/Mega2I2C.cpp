@@ -7,8 +7,8 @@
 
 
 // globale Controller aus main.cpp
-extern BlockController      blockController;
-extern ShadowYardController shadowController;
+extern BlockController& blockController;
+extern ShadowYardController& shadowController;
 
 // ------------------------------------------------------------
 // interner Zustand
