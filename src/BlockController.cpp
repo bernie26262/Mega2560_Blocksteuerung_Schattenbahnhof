@@ -1,9 +1,12 @@
 #include "BlockController.h"
-#include "Block.h"   // ← WICHTIG: nur im .cpp!
+#include "Block.h"
 
-void BlockController::update(uint32_t nowMs)
+// Glättungsfaktor für EMA
+static constexpr float STROM_ALPHA = 0.2f;
+
+void BlockController::update(uint32_t /*nowMs*/)
 {
-    
+    // bewusst leer
 }
 
 bool BlockController::isOccupied(uint8_t id) const
@@ -17,9 +20,16 @@ bool BlockController::isOccupied(uint8_t id) const
 
 uint16_t BlockController::stromFiltered(uint8_t id) const
 {
-    if (!m_blocks || id >= m_count || !m_blocks[id])
+    if (!m_blocks || id >= m_count || !m_blocks[id] || !m_stromFiltered)
         return 0;
 
-    // vorerst Rohwert, Filter kommt später (B1.1)
-    return m_blocks[id]->stromRaw();
+    uint16_t raw = m_blocks[id]->stromRaw();
+    uint16_t& filt = m_stromFiltered[id];
+
+    // EMA: filt = filt + alpha * (raw - filt)
+    filt = filt + (uint16_t)(
+        STROM_ALPHA * ((int32_t)raw - (int32_t)filt)
+    );
+
+    return filt;
 }
