@@ -29,9 +29,9 @@ void buildMega2BlockStatus(BlockStatus* out, const BlockController& ctrl)
 void buildMega2ShadowStatus(ShadowYardStatus& out,
                             const ShadowYardController& sy)
 {
-    // Proto: state ist uint8_t → Enum explizit casten
+    // Zustand
     out.state = static_cast<uint8_t>(sy.state());
 
-    // Proto: nur Einfahrgleis, kein Exit / Target / Not-Aus
-    out.einfahrGleis = 0;
+    // B2: einzig relevantes Gleis
+    out.ausfahrGleis = sy.activeGleis();
 }
