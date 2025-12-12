@@ -1,6 +1,6 @@
 #include "ShadowYardController.h"
 #include "BlockController.h"
-#include "Block.h"
+
 
 ShadowYardController::ShadowYardController(BlockController* bc)
 : m_bc(bc)
@@ -33,8 +33,7 @@ void ShadowYardController::rebuildMasks()
 
 bool ShadowYardController::isBlock6Blocking() const
 {
-    Block* b6 = m_bc->block(6);
-    return (b6 && b6->besetzt());
+    return m_bc && m_bc->isOccupied(6);
 }
 
 void ShadowYardController::chooseGleis()
@@ -42,11 +41,8 @@ void ShadowYardController::chooseGleis()
     // Schattenbahnhof: Block 7–9
     for (uint8_t i = 7; i <= 9; i++)
     {
-        Block* b = m_bc->block(i);
-        if (b && !b->besetzt())
-        {
+        if (!m_bc->isOccupied(i)) {
             m_targetGleis = i;
-            return;
         }
     }
 }
