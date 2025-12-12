@@ -20,6 +20,8 @@
 
 #include "proto_mega2.h"
 #include "safety.h"
+#include "mega2_debug.h"
+#include "Mega2Debug.h"
 
 // ============================================================================
 // GLOBALE OBJEKTE
@@ -131,6 +133,9 @@ static const uint32_t BLOCK_UPDATE_MS    = 20;   // 50 Hz
 static const uint32_t SBHF_UPDATE_MS     = 10;   // 100 Hz
 static const uint32_t WEICHEN_UPDATE_MS  = 10;   // 100 Hz
 static const uint32_t PAYLOAD_UPDATE_MS  = 100;  // 10 Hz
+// ---------- DEBUG ----------
+uint32_t lastDebugDump = 0;
+static const uint32_t DEBUG_DUMP_MS = 1000; // 1 Hz
 
 
 // ============================================================================
@@ -189,6 +194,7 @@ void setup()
 
     // I2C + DataReady
     megaI2C_begin();
+    DBG_BEGIN(115200);
     
 }
 
@@ -233,5 +239,11 @@ void loop()
 
         mega2_buildPayload(g_payload);
         megaI2C_update();
+    }
+
+    if (now - lastDebugDump >= DEBUG_DUMP_MS)
+    {
+        lastDebugDump = now;
+        mega2DebugDump();
     }
 }
