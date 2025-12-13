@@ -1,49 +1,43 @@
 #include "Block.h"
+#include "SensorKontakt.h"
+#include "SensorStrom.h"
 
 Block::Block(uint8_t id,
              SensorKontakt* mainKontakt,
              SensorStrom* strom,
-             SensorKontakt* bhf1,
-             SensorKontakt* bhf2)
-    : m_id(id),
-      m_mainKontakt(mainKontakt),
-      m_strom(strom),
-      m_bhf1(bhf1),
-      m_bhf2(bhf2)
+             SensorKontakt* bhfA,
+             SensorKontakt* bhfB)
+: m_id(id),
+  m_main(mainKontakt),
+  m_bhfA(bhfA),
+  m_bhfB(bhfB),
+  m_strom(strom)
+{}
+
+void Block::begin()
 {
+    // aktuell nichts
 }
 
-void Block::begin() {}
-
-void Block::update(uint32_t now)
+void Block::update(uint32_t /*now*/)
 {
-    (void)now;
-
-    if (m_simOverrideValid) {
-        m_currentBesetzt = m_simOverride;
-        return;
-    }
-
     bool b = false;
 
-    if (m_mainKontakt && m_mainKontakt->isOccupied()) b = true;
-    if (m_bhf1        && m_bhf1->isOccupied())        b = true;
-    if (m_bhf2        && m_bhf2->isOccupied())        b = true;
-    if (m_strom       && m_strom->overThreshold())    b = true;
+    if (m_main && m_main->isOccupied()) b = true;
+    if (m_bhfA && m_bhfA->isOccupied()) b = true;
+    if (m_bhfB && m_bhfB->isOccupied()) b = true;
 
-    m_currentBesetzt = b;
+    if (m_strom && m_strom->overThreshold()) b = true;
+
+    m_besetzt = b;
 }
 
-bool Block::besetzt() const {
-    return m_currentBesetzt;
+bool Block::besetzt() const
+{
+    return m_besetzt;
 }
 
-void Block::setBesetztSim(bool v) {
-    m_simOverrideValid = true;
-    m_simOverride      = v;
-    m_currentBesetzt   = v;
-}
-
-void Block::clearSimOverride() {
-    m_simOverrideValid = false;
+uint16_t Block::stromRaw() const
+{
+    return m_strom ? m_strom->filtered() : 0;
 }

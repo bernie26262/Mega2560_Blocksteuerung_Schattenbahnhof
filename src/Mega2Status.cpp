@@ -33,5 +33,5 @@ void buildMega2ShadowStatus(ShadowYardStatus& out,
     out.state = static_cast<uint8_t>(sy.state());
 
     // B2: einzig relevantes Gleis
-    out.ausfahrGleis = sy.activeGleis();
+    out.ausfahrGleis = sy.ausfahrGleis();
 }

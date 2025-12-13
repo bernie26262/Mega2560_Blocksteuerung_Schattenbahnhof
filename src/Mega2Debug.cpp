@@ -32,7 +32,7 @@ void mega2DebugDump()
     DBG_PRINT(F("SBHF state="));
     DBG_PRINT((uint8_t)shadowController.state());
     DBG_PRINT(F(" ausfahrGleis="));
-    DBG_PRINTLN(shadowController.activeGleis());
+    DBG_PRINTLN(shadowController.ausfahrGleis());
 
     DBG_PRINTLN(F("======================"));
 }

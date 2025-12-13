@@ -206,6 +206,18 @@ void loop()
 {
     uint32_t now = millis();
 
+        // --- DEBUG: manuelle Sensor-Events (D2-1) ---
+    if (Serial.available())
+    {
+        char c = Serial.read();
+        if (c == '1') g_sbhf.onS11();
+        if (c == '2') g_sbhf.onS12();
+        if (c == '3') g_sbhf.onS13();
+        if (c == '4') g_sbhf.onS14();
+        if (c == '5') g_sbhf.onS15();
+        if (c == '6') g_sbhf.onS16();
+    }
+
     safetyUpdate();
 
     // ---------- BLOCKS ----------
