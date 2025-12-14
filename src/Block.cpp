@@ -2,16 +2,24 @@
 #include "SensorKontakt.h"
 #include "SensorStrom.h"
 
+// Sicherheitszeiten
+static constexpr uint32_t KONTAKT_FREE_DELAY_MS = 3000;
+static constexpr uint32_t STROM_FREE_DELAY_MS   = 3000;
+
 Block::Block(uint8_t id,
-             SensorKontakt* kontakt,
+             SensorKontakt* k1,
              SensorStrom* strom,
-             SensorKontakt* kontakt2,
-             SensorKontakt* kontakt3)
-: m_id(id)
-, m_kontakt1(kontakt)
-, m_kontakt2(kontakt2)
-, m_kontakt3(kontakt3)
-, m_strom(strom)
+             SensorKontakt* k2,
+             SensorKontakt* k3)
+: m_id(id),
+  m_kontakt1(k1),
+  m_kontakt2(k2),
+  m_kontakt3(k3),
+  m_strom(strom),
+  m_kontaktLow(false),
+  m_stromOn(false),
+  m_lastKontaktHighMs(0),
+  m_lastStromZeroMs(0)
 {
 }
 
@@ -22,67 +30,73 @@ void Block::begin()
     m_lastStromZeroMs   = now;
 }
 
+void Block::update(uint32_t nowMs)
+{
+    updateContact(nowMs);
+    updateStrom(nowMs);
+}
+
+void Block::updateContact(uint32_t nowMs)
+{
+    bool occupied =
+        (m_kontakt1 && m_kontakt1->isOccupied()) ||
+        (m_kontakt2 && m_kontakt2->isOccupied()) ||
+        (m_kontakt3 && m_kontakt3->isOccupied());
+
+    // Belegt → frei (LOW → HIGH)
+    if (m_kontaktLow && !occupied)
+    {
+        m_lastKontaktHighMs = nowMs;
+    }
+
+    m_kontaktLow = occupied;
+}
+
+void Block::updateStrom(uint32_t nowMs)
+{
+    bool on = m_strom && m_strom->overThreshold();
+
+    if (m_stromOn && !on)
+    {
+        // Strom gerade 0 geworden
+        m_lastStromZeroMs = nowMs;
+    }
+
+    m_stromOn = on;
+}
+
+// --------------------------------------------------
+// Status
+// --------------------------------------------------
+
 bool Block::kontaktAktiv() const
 {
-    // SensorKontakt: isOccupied() == true → LOW → Kontakt aktiv
-    if (m_kontakt1 && m_kontakt1->isOccupied()) return true;
-    if (m_kontakt2 && m_kontakt2->isOccupied()) return true;
-    if (m_kontakt3 && m_kontakt3->isOccupied()) return true;
-    return false;
+    return m_kontaktLow;
 }
 
 bool Block::stromAktiv() const
 {
-    if (!m_strom) return false;
-    return m_strom->overThreshold();
-}
-
-void Block::update(uint32_t nowMs)
-{
-    bool kontaktNow = kontaktAktiv();
-    bool stromNow   = stromAktiv();
-
-    // Kontakt: LOW → HIGH
-    if (!kontaktNow && !m_kontaktHigh)
-    {
-        m_lastKontaktHighMs = nowMs;
-        m_kontaktHigh = true;
-    }
-    else if (kontaktNow)
-    {
-        m_kontaktHigh = false;
-    }
-
-    // Strom: >Threshold → 0
-    if (!stromNow && !m_stromZero)
-    {
-        m_lastStromZeroMs = nowMs;
-        m_stromZero = true;
-    }
-    else if (stromNow)
-    {
-        m_stromZero = false;
-    }
-
-    m_physicallyOccupied = kontaktNow || stromNow;
+    return m_stromOn;
 }
 
 bool Block::besetzt() const
 {
-    return m_physicallyOccupied;
+    return m_kontaktLow || m_stromOn;
 }
 
-bool Block::isFreeForEntry() const
+// --------------------------------------------------
+// B4.1: zeitlich stabile Freigabe
+// --------------------------------------------------
+
+bool Block::isReallyFree(uint32_t nowMs) const
 {
-    if (m_physicallyOccupied)
+    if (besetzt())
         return false;
 
-    uint32_t now = millis();
-
-    if (now - m_lastKontaktHighMs < KONTAKT_FREE_DELAY_MS)
+    if ((nowMs - m_lastKontaktHighMs) < KONTAKT_FREE_DELAY_MS)
         return false;
 
-    if (now - m_lastStromZeroMs < STROM_FREE_DELAY_MS)
+    if ((nowMs - m_lastStromZeroMs) < STROM_FREE_DELAY_MS)
         return false;
 
     return true;
