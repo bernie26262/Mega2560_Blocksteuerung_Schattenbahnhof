@@ -21,6 +21,10 @@ public:
     void schalte(Stellung s);
 
     Stellung getStellung() const { return m_stellung; }
+
+    // 🔹 NEU: Ist-Abzweig-Lage (für ShadowYard)
+    bool isAbzweigIst() const;
+
     bool rueckmeldungAbbiegen() const;
 
     void setSim(Stellung s);

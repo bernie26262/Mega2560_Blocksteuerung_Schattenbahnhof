@@ -16,15 +16,14 @@ public:
     void begin();
     void update(uint32_t nowMs);
 
-    // Status
     bool besetzt() const;
-    bool kontaktAktiv() const { return m_kontaktAktiv; }
-    bool stromAktiv()   const { return m_stromAktiv; }
-
-    // B4.1: zeitlich stabile Freigabe
     bool isReallyFree(uint32_t nowMs) const;
 
-    uint8_t id() const { return m_id; }
+    // --- Debug / Status ---
+    uint8_t  id() const { return m_id; }
+    bool     kontaktAktiv() const { return m_kontaktLow; }
+    bool     stromAktiv()   const { return m_stromOn; }
+    uint16_t stromFiltered() const;
 
 private:
     void updateContact(uint32_t nowMs);
@@ -38,12 +37,7 @@ private:
     SensorKontakt* m_kontakt3;
     SensorStrom*   m_strom;
 
-    // --- Status (einheitlich!) ---
-    bool     m_kontaktAktiv = false;
-    bool     m_stromAktiv   = false;
-    uint32_t m_lastFreeMs   = 0;
-
-    // --- Zeitstempel ---
-    uint32_t m_lastKontaktHighMs = 0;
-    uint32_t m_lastStromZeroMs   = 0;
+    bool     m_kontaktLow = false;
+    bool     m_stromOn    = false;
+    uint32_t m_lastFreeMs = 0;
 };

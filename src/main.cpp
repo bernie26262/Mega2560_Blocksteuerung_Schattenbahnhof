@@ -205,7 +205,7 @@ void loop()
 {
     uint32_t now = millis();
 
-    // --- DEBUG: manuelle Sensor-Events ---
+ // --- DEBUG: manuelle Events ---
     #if MEGA2_DEBUG
     if (Serial.available())
     {
@@ -213,12 +213,24 @@ void loop()
         DBG_PRINT("[DBG] Key ");
         DBG_PRINTLN(c);
 
-        if (c=='1') g_sbhf.onS11();
-        if (c=='2') g_sbhf.onS12();
-        if (c=='3') g_sbhf.onS13();
-        if (c=='4') g_sbhf.onS14();
-        if (c=='5') g_sbhf.onS15();
-        if (c=='6') g_sbhf.onS16();
+        // -----------------------------
+        // SBHF-Debug (Logik)
+        // -----------------------------
+        if (c=='1') { g_sbhf.onS11(); }
+        if (c=='2') { g_sbhf.onS12(); }
+        if (c=='3') { g_sbhf.onS13(); }
+        if (c=='4') { g_sbhf.onS14(); }
+        if (c=='5') { g_sbhf.onS15(); }
+        if (c=='6') { g_sbhf.onS16(); }
+
+        // -----------------------------
+        // Block-Debug (Simulation)
+        // -----------------------------
+        if (c=='B') g_bc.debugSetOccupied(6, true);
+        if (c=='b') g_bc.debugSetOccupied(6, false);
+
+        if (c=='I') g_bc.debugSetStrom(6, true);
+        if (c=='i') g_bc.debugSetStrom(6, false);
     }
     #endif
 
