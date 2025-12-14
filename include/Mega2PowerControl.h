@@ -1,37 +1,27 @@
 #pragma once
+
 #include <Arduino.h>
-#include "mega2_pins.h"
 #include "PowerControl.h"
 
-class Mega2PowerControl : public PowerControl {
+class Mega2PowerControl : public PowerControl
+{
 public:
-    void begin() {
-        pinMode(PIN_RELAY_BLOCK5_NACH_SBH, OUTPUT);
-        pinMode(PIN_RELAY_SBH_GL1_NACH6,   OUTPUT);
-        pinMode(PIN_RELAY_SBH_GL2_NACH6,   OUTPUT);
-        pinMode(PIN_RELAY_SBH_GL3_NACH6,   OUTPUT);
-        pinMode(PIN_RELAY_NOTHALT,         OUTPUT);
+    void begin();
 
-        digitalWrite(PIN_RELAY_BLOCK5_NACH_SBH, HIGH);
-        digitalWrite(PIN_RELAY_SBH_GL1_NACH6,   HIGH);
-        digitalWrite(PIN_RELAY_SBH_GL2_NACH6,   HIGH);
-        digitalWrite(PIN_RELAY_SBH_GL3_NACH6,   HIGH);
-        digitalWrite(PIN_RELAY_NOTHALT,         HIGH);
-    }
+    void setBlock5ToSBhf(bool on) override;
+    void setSbhfGleis(uint8_t gleis, bool on) override;
+    void setNothalt(bool on) override;
 
-    void setBlock5ToSBhf(bool on) override {
-        digitalWrite(PIN_RELAY_BLOCK5_NACH_SBH, on ? LOW : HIGH);
-    }
+    void emergencyShutdown();
 
-    void setSbhfGleis(uint8_t gleis, bool on) override {
-        uint8_t pin = 0;
-        if (gleis == 1) pin = PIN_RELAY_SBH_GL1_NACH6;
-        if (gleis == 2) pin = PIN_RELAY_SBH_GL2_NACH6;
-        if (gleis == 3) pin = PIN_RELAY_SBH_GL3_NACH6;
-        if (pin) digitalWrite(pin, on ? LOW : HIGH);
-    }
+    // ----------------------------------------
+    // Status-Getter (logischer Zustand)
+    // ----------------------------------------
+    bool isTrafoAEnabled() const { return m_trafoAEnabled; }
+    bool isTrafoBEnabled() const { return m_trafoBEnabled; }
 
-    void setNothalt(bool on) override {
-        digitalWrite(PIN_RELAY_NOTHALT, on ? LOW : HIGH);
-    }
+private:
+    // zuletzt gesetzter Zustand (keine HW-Rückmeldung)
+    bool m_trafoAEnabled = false;
+    bool m_trafoBEnabled = false;
 };

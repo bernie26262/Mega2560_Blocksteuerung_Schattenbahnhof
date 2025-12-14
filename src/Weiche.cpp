@@ -66,3 +66,14 @@ bool Weiche::rueckmeldungAbbiegen() const
 
     return m_rueckmelder->isOccupied();
 }
+
+// 🔹 NEU: Ist-Lage ermitteln
+bool Weiche::isAbzweigIst() const
+{
+    // Simulation hat Vorrang
+    if (m_simValid)
+        return (m_sim == ABBIEGEN);
+
+    // echte Rückmeldung
+    return rueckmeldungAbbiegen();
+}
