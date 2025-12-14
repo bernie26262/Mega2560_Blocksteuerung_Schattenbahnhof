@@ -90,14 +90,12 @@ void ShadowYardController::onS14()
 
 void ShadowYardController::onS16()
 {
-    // Nothalt-Gleis AUS
     g_power.setNothalt(false);
     m_nothaltActive = true;
 }
 
 void ShadowYardController::onS15()
 {
-    // Nothalt-Gleis EIN
     g_power.setNothalt(true);
     m_nothaltActive = false;
 }
@@ -114,11 +112,9 @@ void ShadowYardController::update(uint32_t nowMs)
     // ---------------- Parallelüberwachung Nothalt ----------------
     if (m_nothaltActive)
     {
-        bool stromBlock6 = m_bc && (m_bc->stromFiltered(6) > 0);
-
+        bool stromBlock6 = m_bc && (m_bc->isOccupied(6));
         if (!stromBlock6)
         {
-            // Zug steht im Nothalt-Gleis → harter Fehler
             triggerHardError();
             return;
         }
@@ -140,13 +136,10 @@ void ShadowYardController::update(uint32_t nowMs)
             break;
 
         case SBhfState::WaitBlock6:
-            if (!m_bc || m_bc->isOccupied(6))
-            {
-                // Block 6 belegt → kein Strom, kein Error
+            // 🔴 B3: zentrale Blockfreigabe
+            if (!m_bc || !m_bc->canEnter(5, 6))
                 break;
-            }
 
-            // Block 6 frei → Strom freigeben
             g_power.setBlock5ToSBhf(false);
             g_power.setSbhfGleis(m_currentGleis, true);
 
@@ -182,7 +175,7 @@ uint8_t ShadowYardController::pickRandomGleisNoRepeat(uint8_t last)
 {
     uint8_t g;
     do {
-        g = random(1, 4); // 1..3
+        g = random(1, 4);
     } while (g == last);
     return g;
 }
@@ -257,30 +250,24 @@ void ShadowYardController::processWeichenSequence(uint32_t nowMs)
 
         case WPhase::Impuls:
             if (nowMs - m_phaseStartMs >= WEICHE_IMPULS_MS)
-            {
                 m_wphase = WPhase::Check;
-            }
             break;
 
         case WPhase::Check:
+        {
+            bool istAbbiegen  = w->rueckmeldungAbbiegen();
+            bool sollAbbiegen = (w->getStellung() == Weiche::ABBIEGEN);
+
+            if (istAbbiegen != sollAbbiegen)
             {
-                bool istAbbiegen  = w->rueckmeldungAbbiegen();
-                bool sollAbbiegen = (w->getStellung() == Weiche::ABBIEGEN);
+                triggerHardError();
+                return;
+            }
 
-                if (istAbbiegen != sollAbbiegen)
-                {
-                    // Soll/Ist-Abweichung → harter Fehler
-                    triggerHardError();
-                    return;
-                }
-
-            // nächste Weiche
             m_weichenIndex++;
             m_wphase = WPhase::Idle;
             break;
         }
-
-
     }
 }
 
