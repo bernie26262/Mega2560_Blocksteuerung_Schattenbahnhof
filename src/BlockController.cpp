@@ -3,13 +3,17 @@
 #include "Block.h"
 
 // --------------------------------------------------
-// Implementation
+// Update (noch leer)
 // --------------------------------------------------
 
 void BlockController::update(uint32_t /*nowMs*/)
 {
-    // B1: bewusst leer
+    // bewusst leer
 }
+
+// --------------------------------------------------
+// Status
+// --------------------------------------------------
 
 bool BlockController::isOccupied(uint8_t id) const
 {
@@ -21,18 +25,16 @@ bool BlockController::isOccupied(uint8_t id) const
 
 uint16_t BlockController::stromFiltered(uint8_t /*id*/) const
 {
-    // B1: keine Stromanzeige im Controller
     return 0;
 }
 
 bool BlockController::stromOverThreshold(uint8_t /*id*/) const
 {
-    // B1: bewusst immer false
     return false;
 }
 
 // --------------------------------------------------
-// Block-Logik: kann der Zug einfahren? (B2 + B4.1)
+// B4.2: zentrale Fahrfreigabe
 // --------------------------------------------------
 
 bool BlockController::canEnter(uint8_t from, uint8_t to) const
@@ -46,8 +48,10 @@ bool BlockController::canEnter(uint8_t from, uint8_t to) const
     if (!fromBlock || !toBlock)
         return false;
 
-    // 🔹 B4.1: zeitlich stabile Freigabe
-    if (!toBlock->isReallyFree(millis()))
+    uint32_t now = millis();
+
+    // 🔴 B4.2: zeitlich stabile Freigabe
+    if (!toBlock->isReallyFree(now))
         return false;
 
     // --------------------------------------------------
