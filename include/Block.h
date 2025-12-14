@@ -18,8 +18,8 @@ public:
 
     // Status
     bool besetzt() const;
-    bool kontaktAktiv() const;
-    bool stromAktiv() const;
+    bool kontaktAktiv() const { return m_kontaktAktiv; }
+    bool stromAktiv()   const { return m_stromAktiv; }
 
     // B4.1: zeitlich stabile Freigabe
     bool isReallyFree(uint32_t nowMs) const;
@@ -38,11 +38,12 @@ private:
     SensorKontakt* m_kontakt3;
     SensorStrom*   m_strom;
 
-    // --- Status ---
-    bool m_kontaktLow;
-    bool m_stromOn;
+    // --- Status (einheitlich!) ---
+    bool     m_kontaktAktiv = false;
+    bool     m_stromAktiv   = false;
+    uint32_t m_lastFreeMs   = 0;
 
     // --- Zeitstempel ---
-    uint32_t m_lastKontaktHighMs;
-    uint32_t m_lastStromZeroMs;
+    uint32_t m_lastKontaktHighMs = 0;
+    uint32_t m_lastStromZeroMs   = 0;
 };

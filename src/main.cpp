@@ -143,7 +143,7 @@ static const uint32_t DEBUG_DUMP_MS = 1000; // 1 Hz
 // ============================================================================
 void setup()
 {
-    Serial.begin(115200);
+    DBG_BEGIN(115200);
     while (!Serial && millis() < 1000) {}
 
     Serial.println(F("\n=== Mega2 Schattenbahnhof startet ==="));
@@ -194,7 +194,6 @@ void setup()
 
     // I2C + DataReady
     megaI2C_begin();
-    DBG_BEGIN(115200);
     
 }
 
@@ -206,17 +205,23 @@ void loop()
 {
     uint32_t now = millis();
 
-        // --- DEBUG: manuelle Sensor-Events (D2-1) ---
+    // --- DEBUG: manuelle Sensor-Events ---
+    #if MEGA2_DEBUG
     if (Serial.available())
     {
         char c = Serial.read();
-        if (c == '1') g_sbhf.onS11();
-        if (c == '2') g_sbhf.onS12();
-        if (c == '3') g_sbhf.onS13();
-        if (c == '4') g_sbhf.onS14();
-        if (c == '5') g_sbhf.onS15();
-        if (c == '6') g_sbhf.onS16();
+        DBG_PRINT("[DBG] Key ");
+        DBG_PRINTLN(c);
+
+        if (c=='1') g_sbhf.onS11();
+        if (c=='2') g_sbhf.onS12();
+        if (c=='3') g_sbhf.onS13();
+        if (c=='4') g_sbhf.onS14();
+        if (c=='5') g_sbhf.onS15();
+        if (c=='6') g_sbhf.onS16();
     }
+    #endif
+
 
     safetyUpdate();
 

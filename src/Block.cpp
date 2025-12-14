@@ -1,11 +1,11 @@
 #include "Block.h"
 #include "SensorKontakt.h"
 #include "SensorStrom.h"
+#include "mega2_debug.h"
 
-// Sicherheitszeiten
-static constexpr uint32_t KONTAKT_FREE_DELAY_MS = 3000;
-static constexpr uint32_t STROM_FREE_DELAY_MS   = 3000;
-
+// --------------------------------------------------
+// Konstruktor
+// --------------------------------------------------
 Block::Block(uint8_t id,
              SensorKontakt* k1,
              SensorStrom* strom,
@@ -15,89 +15,93 @@ Block::Block(uint8_t id,
   m_kontakt1(k1),
   m_kontakt2(k2),
   m_kontakt3(k3),
-  m_strom(strom),
-  m_kontaktLow(false),
-  m_stromOn(false),
-  m_lastKontaktHighMs(0),
-  m_lastStromZeroMs(0)
+  m_strom(strom)
 {
 }
 
+// --------------------------------------------------
+// Init
+// --------------------------------------------------
 void Block::begin()
 {
-    uint32_t now = millis();
-    m_lastKontaktHighMs = now;
-    m_lastStromZeroMs   = now;
+    m_kontaktAktiv = false;
+    m_stromAktiv   = false;
+    m_lastFreeMs   = millis();
+
+    m_lastKontaktHighMs = millis();
+    m_lastStromZeroMs   = millis();
 }
 
+// --------------------------------------------------
+// Update
+// --------------------------------------------------
 void Block::update(uint32_t nowMs)
 {
     updateContact(nowMs);
     updateStrom(nowMs);
 }
 
+// --------------------------------------------------
+// Kontaktlogik
+// --------------------------------------------------
 void Block::updateContact(uint32_t nowMs)
 {
-    bool occupied =
+    bool now =
         (m_kontakt1 && m_kontakt1->isOccupied()) ||
         (m_kontakt2 && m_kontakt2->isOccupied()) ||
         (m_kontakt3 && m_kontakt3->isOccupied());
 
-    // Belegt → frei (LOW → HIGH)
-    if (m_kontaktLow && !occupied)
+    if (now != m_kontaktAktiv)
     {
-        m_lastKontaktHighMs = nowMs;
-    }
+        DBG_PRINT("[B"); DBG_PRINT(m_id);
+        DBG_PRINT("] Kontakt ");
+        DBG_PRINTLN(now ? "AKTIV" : "FREI");
 
-    m_kontaktLow = occupied;
+        m_kontaktAktiv = now;
+
+        if (!now)
+            m_lastKontaktHighMs = nowMs;
+    }
 }
 
+// --------------------------------------------------
+// Stromlogik
+// --------------------------------------------------
 void Block::updateStrom(uint32_t nowMs)
 {
-    bool on = m_strom && m_strom->overThreshold();
+    bool now = (m_strom && m_strom->overThreshold());
 
-    if (m_stromOn && !on)
+    if (now != m_stromAktiv)
     {
-        // Strom gerade 0 geworden
-        m_lastStromZeroMs = nowMs;
+        DBG_PRINT("[B"); DBG_PRINT(m_id);
+        DBG_PRINT("] Strom ");
+        DBG_PRINTLN(now ? "AKTIV" : "0");
+
+        m_stromAktiv = now;
+
+        if (!now)
+            m_lastStromZeroMs = nowMs;
     }
-
-    m_stromOn = on;
 }
 
 // --------------------------------------------------
-// Status
+// Belegung
 // --------------------------------------------------
-
-bool Block::kontaktAktiv() const
-{
-    return m_kontaktLow;
-}
-
-bool Block::stromAktiv() const
-{
-    return m_stromOn;
-}
-
 bool Block::besetzt() const
 {
-    return m_kontaktLow || m_stromOn;
+    return m_kontaktAktiv || m_stromAktiv;
 }
 
 // --------------------------------------------------
-// B4.1: zeitlich stabile Freigabe
+// Zeitlich stabile Freigabe (B4.1)
 // --------------------------------------------------
-
 bool Block::isReallyFree(uint32_t nowMs) const
 {
-    if (besetzt())
+    if (m_kontaktAktiv || m_stromAktiv)
         return false;
 
-    if ((nowMs - m_lastKontaktHighMs) < KONTAKT_FREE_DELAY_MS)
-        return false;
+    uint32_t dtKontakt = nowMs - m_lastKontaktHighMs;
+    uint32_t dtStrom   = nowMs - m_lastStromZeroMs;
 
-    if ((nowMs - m_lastStromZeroMs) < STROM_FREE_DELAY_MS)
-        return false;
-
-    return true;
+    return (dtKontakt >= 3000) && (dtStrom >= 3000);
 }
