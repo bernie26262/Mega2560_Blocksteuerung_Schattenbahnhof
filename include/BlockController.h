@@ -39,6 +39,9 @@ public:
     uint16_t stromFiltered(uint8_t id) const;     // EMA-gefilterter Strom
     bool     stromOverThreshold(uint8_t id) const;// B1.2: Strom > Schwellwert (Hysterese)
 
+    // B2: Blockfreigabe-Logik
+    bool canEnter(uint8_t fromBlock, uint8_t toBlock) const;
+
 private:
     Block**    m_blocks;
     uint8_t   m_count;
