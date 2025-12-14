@@ -3,41 +3,87 @@
 #include "SensorStrom.h"
 
 Block::Block(uint8_t id,
-             SensorKontakt* mainKontakt,
+             SensorKontakt* kontakt,
              SensorStrom* strom,
-             SensorKontakt* bhfA,
-             SensorKontakt* bhfB)
-: m_id(id),
-  m_main(mainKontakt),
-  m_bhfA(bhfA),
-  m_bhfB(bhfB),
-  m_strom(strom)
-{}
+             SensorKontakt* kontakt2,
+             SensorKontakt* kontakt3)
+: m_id(id)
+, m_kontakt1(kontakt)
+, m_kontakt2(kontakt2)
+, m_kontakt3(kontakt3)
+, m_strom(strom)
+{
+}
 
 void Block::begin()
 {
-    // aktuell nichts
+    uint32_t now = millis();
+    m_lastKontaktHighMs = now;
+    m_lastStromZeroMs   = now;
 }
 
-void Block::update(uint32_t /*now*/)
+bool Block::kontaktAktiv() const
 {
-    bool b = false;
+    // SensorKontakt: isOccupied() == true → LOW → Kontakt aktiv
+    if (m_kontakt1 && m_kontakt1->isOccupied()) return true;
+    if (m_kontakt2 && m_kontakt2->isOccupied()) return true;
+    if (m_kontakt3 && m_kontakt3->isOccupied()) return true;
+    return false;
+}
 
-    if (m_main && m_main->isOccupied()) b = true;
-    if (m_bhfA && m_bhfA->isOccupied()) b = true;
-    if (m_bhfB && m_bhfB->isOccupied()) b = true;
+bool Block::stromAktiv() const
+{
+    if (!m_strom) return false;
+    return m_strom->overThreshold();
+}
 
-    if (m_strom && m_strom->overThreshold()) b = true;
+void Block::update(uint32_t nowMs)
+{
+    bool kontaktNow = kontaktAktiv();
+    bool stromNow   = stromAktiv();
 
-    m_besetzt = b;
+    // Kontakt: LOW → HIGH
+    if (!kontaktNow && !m_kontaktHigh)
+    {
+        m_lastKontaktHighMs = nowMs;
+        m_kontaktHigh = true;
+    }
+    else if (kontaktNow)
+    {
+        m_kontaktHigh = false;
+    }
+
+    // Strom: >Threshold → 0
+    if (!stromNow && !m_stromZero)
+    {
+        m_lastStromZeroMs = nowMs;
+        m_stromZero = true;
+    }
+    else if (stromNow)
+    {
+        m_stromZero = false;
+    }
+
+    m_physicallyOccupied = kontaktNow || stromNow;
 }
 
 bool Block::besetzt() const
 {
-    return m_besetzt;
+    return m_physicallyOccupied;
 }
 
-uint16_t Block::stromRaw() const
+bool Block::isFreeForEntry() const
 {
-    return m_strom ? m_strom->filtered() : 0;
+    if (m_physicallyOccupied)
+        return false;
+
+    uint32_t now = millis();
+
+    if (now - m_lastKontaktHighMs < KONTAKT_FREE_DELAY_MS)
+        return false;
+
+    if (now - m_lastStromZeroMs < STROM_FREE_DELAY_MS)
+        return false;
+
+    return true;
 }
