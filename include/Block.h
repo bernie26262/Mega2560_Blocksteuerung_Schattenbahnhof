@@ -8,25 +8,27 @@ class Block
 {
 public:
     Block(uint8_t id,
-          SensorKontakt* kontakt,
+          SensorKontakt* k1,
           SensorStrom* strom,
-          SensorKontakt* kontakt2 = nullptr,
-          SensorKontakt* kontakt3 = nullptr);
+          SensorKontakt* k2 = nullptr,
+          SensorKontakt* k3 = nullptr);
 
     void begin();
     void update(uint32_t nowMs);
 
-    // Physischer Zustand
+    // Status
     bool besetzt() const;
+    bool kontaktAktiv() const;
+    bool stromAktiv() const;
 
-    // B1: Freigabe für Einfahrt (zeitverzögert)
-    bool isFreeForEntry() const;
+    // B4.1: zeitlich stabile Freigabe
+    bool isReallyFree(uint32_t nowMs) const;
 
     uint8_t id() const { return m_id; }
 
 private:
-    bool kontaktAktiv() const;
-    bool stromAktiv() const;
+    void updateContact(uint32_t nowMs);
+    void updateStrom(uint32_t nowMs);
 
 private:
     uint8_t m_id;
@@ -36,16 +38,11 @@ private:
     SensorKontakt* m_kontakt3;
     SensorStrom*   m_strom;
 
-    // Zustände
-    bool m_physicallyOccupied = false;
+    // --- Status ---
+    bool m_kontaktLow;
+    bool m_stromOn;
 
-    // Zeitlogik
-    uint32_t m_lastKontaktHighMs = 0;
-    uint32_t m_lastStromZeroMs   = 0;
-
-    bool m_kontaktHigh = true;
-    bool m_stromZero   = true;
-
-    static constexpr uint32_t KONTAKT_FREE_DELAY_MS = 3000;
-    static constexpr uint32_t STROM_FREE_DELAY_MS   = 3000;
+    // --- Zeitstempel ---
+    uint32_t m_lastKontaktHighMs;
+    uint32_t m_lastStromZeroMs;
 };
