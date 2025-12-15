@@ -16,8 +16,6 @@ extern Weiche w15;
 
 extern Mega2PowerControl g_power;
 
-
-
 // ------------------------------------------------------------
 // Weichen-Zeiten (D2)
 // ------------------------------------------------------------
@@ -38,8 +36,7 @@ ShadowYardController::ShadowYardController(BlockController* bc)
   m_wphase(WPhase::Idle),
   m_phaseStartMs(0),
   m_errorActive(false),
-  m_exitPowerOn(false),
-  m_nothaltActive(false)
+  m_exitPowerOn(false)
 {
 }
 
@@ -50,7 +47,28 @@ void ShadowYardController::begin()
     m_nextGleis = 1;
     m_errorActive = false;
     m_exitPowerOn = false;
-    m_nothaltActive = false;
+
+    m_weichenCount = 0;
+    m_weichenIndex = 0;
+    m_wphase = WPhase::Idle;
+    m_phaseStartMs = 0;
+}
+
+// ============================================================
+// Weichen-Status Getter für Proto
+// ============================================================
+
+bool ShadowYardController::weicheIst(uint8_t idx) const
+{
+    if (idx >= m_weichenCount) return false;
+    if (!m_weichen[idx]) return false;
+    return m_weichen[idx]->rueckmeldungAbbiegen();
+}
+
+bool ShadowYardController::weicheSoll(uint8_t idx) const
+{
+    if (idx >= m_weichenCount) return false;
+    return m_weichenSollAbzweig[idx];
 }
 
 // ============================================================
@@ -59,6 +77,12 @@ void ShadowYardController::begin()
 
 void ShadowYardController::onS11()
 {
+    if (m_state == SBhfState::Error)
+    {
+        DBG_PRINTLN("[SBHF] S11 ignored (ERROR-LOCK)");
+        return;
+    }
+
     if (m_state != SBhfState::Idle || m_errorActive)
         return;
 
@@ -69,6 +93,12 @@ void ShadowYardController::onS11()
 
 void ShadowYardController::onS12()
 {
+    if (m_state == SBhfState::Error)
+    {
+        DBG_PRINTLN("[SBHF] S12 ignored (ERROR-LOCK)");
+        return;
+    }
+
     if (m_state == SBhfState::ExitRunning && m_currentGleis == 1)
     {
         g_power.setSbhfGleis(1, false);
@@ -79,6 +109,12 @@ void ShadowYardController::onS12()
 
 void ShadowYardController::onS13()
 {
+    if (m_state == SBhfState::Error)
+    {
+        DBG_PRINTLN("[SBHF] S13 ignored (ERROR-LOCK)");
+        return;
+    }
+
     if (m_state == SBhfState::ExitRunning && m_currentGleis == 2)
     {
         g_power.setSbhfGleis(2, false);
@@ -89,6 +125,12 @@ void ShadowYardController::onS13()
 
 void ShadowYardController::onS14()
 {
+    if (m_state == SBhfState::Error)
+    {
+        DBG_PRINTLN("[SBHF] S14 ignored (ERROR-LOCK)");
+        return;
+    }
+
     if (m_state == SBhfState::ExitRunning && m_currentGleis == 3)
     {
         g_power.setSbhfGleis(3, false);
@@ -99,16 +141,26 @@ void ShadowYardController::onS14()
 
 void ShadowYardController::onS15()
 {
+    if (m_state == SBhfState::Error)
+    {
+        DBG_PRINTLN("[SBHF] S15 ignored (ERROR-LOCK)");
+        return;
+    }
+
     // NOT-AUS EIN
     g_power.setNothalt(true);
-    m_nothaltActive = true;
 }
 
 void ShadowYardController::onS16()
 {
+    if (m_state == SBhfState::Error)
+    {
+        DBG_PRINTLN("[SBHF] S16 ignored (ERROR-LOCK)");
+        return;
+    }
+
     // NOT-AUS AUS -> Hard-Error
     g_power.setNothalt(false);
-    m_nothaltActive = true;
     triggerHardError();
 }
 
@@ -191,6 +243,7 @@ void ShadowYardController::buildWeichenPlan(uint8_t gleis)
 
     auto add = [&](Weiche* w, bool abzweig)
     {
+        if (m_weichenCount >= MAX_WEICHEN) return;
         m_weichen[m_weichenCount] = w;
         m_weichenSollAbzweig[m_weichenCount] = abzweig;
         m_weichenCount++;
@@ -207,6 +260,7 @@ void ShadowYardController::buildWeichenPlan(uint8_t gleis)
         add(&w12, false);
         add(&w13, true);
         add(&w14, true);
+        add(&w15, false);   // <- fehlte vorher, jetzt konsistent
     }
     else if (gleis == 3)
     {
@@ -268,14 +322,14 @@ void ShadowYardController::processWeichenSequence(uint32_t nowMs)
         {
             uint32_t elapsed = nowMs - m_phaseStartMs;
 
-            // 3.1 Noch zu früh → Mechanik hat Zeit
+            // Noch zu früh → Mechanik hat Zeit
             if (elapsed < WEICHE_MIN_CHECK_MS)
                 return;
 
             bool istAbbiegen  = w->rueckmeldungAbbiegen();
             bool sollAbbiegen = (w->getStellung() == Weiche::ABBIEGEN);
 
-            // 3.2 Erfolg → nächste Weiche
+            // Erfolg → nächste Weiche
             if (istAbbiegen == sollAbbiegen)
             {
                 m_weichenIndex++;
@@ -283,17 +337,16 @@ void ShadowYardController::processWeichenSequence(uint32_t nowMs)
                 return;
             }
 
-            // 3.3 Noch innerhalb Timeout → weiter warten
+            // Noch innerhalb Timeout → weiter warten
             if (elapsed < WEICHE_TIMEOUT_MS)
                 return;
 
-            // 3.4 Timeout → HARD ERROR
+            // Timeout → HARD ERROR
             triggerHardError();
             return;
         }
     }
 }
-
 
 // ============================================================
 // Fehler / Reset (D3)
@@ -306,7 +359,6 @@ void ShadowYardController::triggerHardError()
 
     m_errorActive = true;
     m_state = SBhfState::Error;
-    m_nothaltActive = true;     // ← 🔧 FEHLTE
 
     // HART: komplette Anlage stromlos
     safetySetEmergency(true);
@@ -317,9 +369,11 @@ bool ShadowYardController::canReset() const
     if (m_state != SBhfState::Error)
         return false;
 
-    if (!m_nothaltActive)
+    // Reset NUR wenn Not-Aus freigegeben ist
+    if (g_power.isNothaltActive())
         return false;
 
+    // Keine aktive Ausfahrt
     if (m_exitPowerOn)
         return false;
 
@@ -329,15 +383,20 @@ bool ShadowYardController::canReset() const
 void ShadowYardController::resetError()
 {
     m_errorActive   = false;
-    m_exitPowerOn  = false;
-    m_currentGleis = 0;
+    m_exitPowerOn   = false;
+    m_currentGleis  = 0;
+
+    m_weichenCount  = 0;
+    m_weichenIndex  = 0;
+    m_wphase        = WPhase::Idle;
+    m_phaseStartMs  = 0;
 }
 
 void ShadowYardController::onResetAck()
 {
     if (!canReset())
     {
-        DBG_PRINTLN("[SBHF] RESET ignored");
+        DBG_PRINTLN("[SBHF] RESET ignored (conditions not met)");
         return;
     }
 

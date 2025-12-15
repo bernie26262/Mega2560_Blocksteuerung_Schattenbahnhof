@@ -1,11 +1,9 @@
 #include "proto_mega2.h"
 #include "BlockController.h"
 #include "ShadowYardController.h"
-#include "Weiche.h"
 
 extern BlockController      g_bc;
 extern ShadowYardController g_sbhf;
-extern Weiche*              g_weichen[4];
 
 void mega2_buildPayload(Mega2Payload& p)
 {
@@ -28,14 +26,21 @@ void mega2_buildPayload(Mega2Payload& p)
     p.sbhfOccupied[2] = g_bc.isOccupied(9);
 
     // ----------------------------------
-    // WEICHEN
-    // (Alt-Code bleibt vorerst)
+    // WEICHEN (NEU: aus ShadowYardController, kein g_weichen mehr)
     // ----------------------------------
+    const uint8_t n = g_sbhf.weichenCount();
     for (uint8_t w = 0; w < MEGA2_MAX_WEICHEN; w++)
     {
-        p.weichenIst[w]  = g_weichen[w]->rueckmeldungAbbiegen();
-        p.weichenSoll[w] =
-            (g_weichen[w]->getStellung() == Weiche::ABBIEGEN);
+        if (w < n)
+        {
+            p.weichenIst[w]  = g_sbhf.weicheIst(w);
+            p.weichenSoll[w] = g_sbhf.weicheSoll(w);
+        }
+        else
+        {
+            p.weichenIst[w]  = false;
+            p.weichenSoll[w] = false;
+        }
     }
 
     // ----------------------------------

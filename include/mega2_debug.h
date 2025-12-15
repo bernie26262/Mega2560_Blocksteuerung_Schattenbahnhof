@@ -1,7 +1,7 @@
 #pragma once
 
 // Debug global ein/aus
-#define MEGA2_DEBUG 1
+
 
 #if MEGA2_DEBUG
   #define DBG_BEGIN(b)    Serial.begin(b)

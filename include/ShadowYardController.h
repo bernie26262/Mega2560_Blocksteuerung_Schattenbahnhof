@@ -50,6 +50,14 @@ public:
     // Modus (vorbereitet für ESP)
     void setMode(SbhfMode m) { m_mode = m; }
 
+    // --------------------------------------------------------
+    // Weichen-Status für Proto (ersetzt g_weichen komplett)
+    // Index 0..weichenCount()-1 entspricht der aktuellen Sequenz
+    // --------------------------------------------------------
+    uint8_t weichenCount() const { return m_weichenCount; }
+    bool    weicheIst(uint8_t idx) const;
+    bool    weicheSoll(uint8_t idx) const;
+
 private:
     // ---------------- Gleiswahl ----------------
     uint8_t pickNextGleis();
@@ -75,7 +83,7 @@ private:
     uint8_t m_nextGleis;      // serieller Modus
 
     // Weichen-Sequencer
-    static constexpr uint8_t MAX_WEICHEN = 3;
+    static constexpr uint8_t MAX_WEICHEN = 4; // Gleis 2 hat 4 Weichen (W12,W13,W14,W15)
     Weiche*  m_weichen[MAX_WEICHEN];
     bool     m_weichenSollAbzweig[MAX_WEICHEN];
     uint8_t  m_weichenCount;
@@ -88,5 +96,4 @@ private:
     // Flags
     bool m_errorActive;
     bool m_exitPowerOn;
-    bool m_nothaltActive;
 };

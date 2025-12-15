@@ -1,183 +1,181 @@
-#include <Arduino.h>
 #include "BlockController.h"
 #include "Block.h"
 #include "mega2_debug.h"
 
-// --------------------------------------------------
-// Update aller Blöcke
-// --------------------------------------------------
+#if MEGA2_DEBUG
+static constexpr uint8_t  DBG_MIN_ID = 1;
+static constexpr uint8_t  DBG_MAX_ID = 9;
+static constexpr uint32_t DBG_STABLE_FREE_MS = 500;
+
+static inline bool dbgIdOk(uint8_t id)
+{
+    return (id >= DBG_MIN_ID && id <= DBG_MAX_ID);
+}
+#endif
+
+// ------------------------------------------------------------
+// ctor
+// ------------------------------------------------------------
+BlockController::BlockController(Block** blocks, uint8_t count)
+: m_blocks(blocks),
+  m_count(count)
+{
+    m_stromFiltered = new uint16_t[count]();
+    m_stromActive   = new bool[count]();
+
+#if MEGA2_DEBUG
+    for (uint8_t i = 0; i < 16; i++)
+    {
+        m_dbgActive[i]     = false;
+        m_dbgOcc[i]        = false;
+        m_dbgStrom[i]      = false;
+        m_dbgLastFreeMs[i] = 0;
+    }
+#endif
+}
+
+// ------------------------------------------------------------
+// update
+// ------------------------------------------------------------
 void BlockController::update(uint32_t nowMs)
 {
     for (uint8_t i = 0; i < m_count; i++)
-    {
         if (m_blocks[i])
             m_blocks[i]->update(nowMs);
-    }
 }
 
-// --------------------------------------------------
-// Besetzt-Abfrage
-// --------------------------------------------------
+// ------------------------------------------------------------
+// isOccupied
+// ------------------------------------------------------------
 bool BlockController::isOccupied(uint8_t id) const
 {
+#if MEGA2_DEBUG
+    if (dbgIdOk(id) && m_dbgActive[id])
+        return (m_dbgOcc[id] || m_dbgStrom[id]);
+#endif
+
     if (!m_blocks || id >= m_count || !m_blocks[id])
         return false;
 
     return m_blocks[id]->besetzt();
 }
 
-// --------------------------------------------------
-// Darf von -> nach eingefahren werden?
-// --------------------------------------------------
+// ------------------------------------------------------------
+// canEnter
+// ------------------------------------------------------------
 bool BlockController::canEnter(uint8_t from, uint8_t to) const
 {
     if (!m_blocks || from >= m_count || to >= m_count)
-    {
-        DBG_PRINT("[BC] ");
-        DBG_PRINT(from);
-        DBG_PRINT(" -> ");
-        DBG_PRINT(to);
-        DBG_PRINTLN(" FAIL (invalid index)");
         return false;
-    }
 
     Block* fromBlock = m_blocks[from];
     Block* toBlock   = m_blocks[to];
     if (!fromBlock || !toBlock)
-    {
-        DBG_PRINT("[BC] ");
-        DBG_PRINT(from);
-        DBG_PRINT(" -> ");
-        DBG_PRINT(to);
-        DBG_PRINTLN(" FAIL (null block)");
         return false;
-    }
 
     uint32_t now = millis();
 
-    // 🔒 Block muss zeitstabil frei sein
-    if (!toBlock->isReallyFree(now))
+#if MEGA2_DEBUG
+    if (dbgIdOk(to) && m_dbgActive[to])
     {
-        DBG_PRINT("[BC] ");
-        DBG_PRINT(from);
-        DBG_PRINT(" -> ");
-        DBG_PRINT(to);
-        DBG_PRINTLN(" FAIL (not stable free)");
-        return false;
+        if (m_dbgOcc[to] || m_dbgStrom[to])
+            return false;
+
+        if ((now - m_dbgLastFreeMs[to]) < DBG_STABLE_FREE_MS)
+            return false;
+    }
+    else
+#endif
+    {
+        if (!toBlock->isReallyFree(now))
+            return false;
     }
 
-    // ==================================================
-    // Sonderlogik BLOCK 4
-    // ==================================================
+    // ---------------- BLOCK 4 Sonderregeln ----------------
     if (to == 4)
     {
         uint8_t occ123 = 0;
         for (uint8_t i = 1; i <= 3; i++)
-            if (m_blocks[i] && m_blocks[i]->besetzt())
+            if (m_blocks[i] && isOccupied(i))
                 occ123++;
 
-        // 6 -> 4
         if (from == 6)
-        {
-            DBG_PRINT("[BC] 6 -> 4 occ123=");
-            DBG_PRINTLN(occ123);
+            return (occ123 <= 2);
 
-            if (occ123 <= 2)
-            {
-                DBG_PRINTLN("[BC] 6 -> 4 OK");
-                return true;
-            }
-
-            DBG_PRINTLN("[BC] 6 -> 4 FAIL (occ123 > 2)");
-            return false;
-        }
-
-        // 3 -> 4
         if (from == 3)
         {
-            bool block6Occ = m_blocks[6] && m_blocks[6]->besetzt();
-
-            DBG_PRINT("[BC] 3 -> 4 occ123=");
-            DBG_PRINT(occ123);
-            DBG_PRINT(" block6=");
-            DBG_PRINTLN(block6Occ);
-
-            if (!block6Occ)
-            {
-                DBG_PRINTLN("[BC] 3 -> 4 OK (block6 frei)");
+            if (!isOccupied(6))
                 return true;
-            }
-
-            if (occ123 > 2)
-            {
-                DBG_PRINTLN("[BC] 3 -> 4 OK (block6 besetzt, occ123 > 2)");
-                return true;
-            }
-
-            DBG_PRINTLN("[BC] 3 -> 4 FAIL");
-            return false;
+            return (occ123 > 2);
         }
 
-        DBG_PRINTLN("[BC] -> 4 FAIL (from block not allowed)");
         return false;
     }
 
-    // ==================================================
-    // Standardfreigaben
-    // ==================================================
-    if (from == 1 && to == 2)
-    {
-        DBG_PRINTLN("[BC] 1 -> 2 OK");
-        return true;
-    }
-
-    if (from == 2 && to == 3)
-    {
-        DBG_PRINTLN("[BC] 2 -> 3 OK");
-        return true;
-    }
-
-    if (from == 4 && to == 5)
-    {
-        DBG_PRINTLN("[BC] 4 -> 5 OK");
-        return true;
-    }
-
-    if (from == 5 && (to == 7 || to == 8 || to == 9))
-    {
-        DBG_PRINT("[BC] 5 -> ");
-        DBG_PRINT(to);
-        DBG_PRINTLN(" OK (SBhf)");
-        return true;
-    }
-
-    if ((from == 7 || from == 8 || from == 9) && to == 6)
-    {
-        DBG_PRINT("[BC] ");
-        DBG_PRINT(from);
-        DBG_PRINTLN(" -> 6 OK");
-        return true;
-    }
-
-    DBG_PRINT("[BC] ");
-    DBG_PRINT(from);
-    DBG_PRINT(" -> ");
-    DBG_PRINT(to);
-    DBG_PRINTLN(" FAIL (no rule)");
+    // ---------------- Standardpfade ----------------
+    if (from == 1 && to == 2) return true;
+    if (from == 2 && to == 3) return true;
+    if (from == 4 && to == 5) return true;
+    if (from == 5 && (to == 7 || to == 8 || to == 9)) return true;
+    if ((from == 7 || from == 8 || from == 9) && to == 6) return true;
 
     return false;
 }
 
-// --------------------------------------------------
-// Stromanzeige (Debug / Status)
-// --------------------------------------------------
+// ------------------------------------------------------------
+// stromFiltered
+// ------------------------------------------------------------
 uint16_t BlockController::stromFiltered(uint8_t id) const
 {
+#if MEGA2_DEBUG
+    if (dbgIdOk(id) && m_dbgActive[id])
+        return m_dbgStrom[id] ? 1 : 0;
+#endif
+
     if (!m_blocks || id >= m_count || !m_blocks[id])
         return 0;
 
-    // Debug-Phase:
-    // echte Stromlogik liegt im Block (SensorStrom)
-    // hier nur Anzeige / I2C / Diagnose
     return m_blocks[id]->stromAktiv() ? 1 : 0;
 }
+
+bool BlockController::stromOverThreshold(uint8_t) const
+{
+    return false;
+}
+
+#if MEGA2_DEBUG
+// ------------------------------------------------------------
+// DEBUG API
+// ------------------------------------------------------------
+void BlockController::debugSetOccupied(uint8_t id, bool occ)
+{
+    if (!dbgIdOk(id)) return;
+
+    m_dbgActive[id] = true;
+    m_dbgOcc[id]    = occ;
+
+    if (!m_dbgOcc[id] && !m_dbgStrom[id])
+        m_dbgLastFreeMs[id] = millis();
+}
+
+void BlockController::debugSetStrom(uint8_t id, bool active)
+{
+    if (!dbgIdOk(id)) return;
+
+    m_dbgActive[id] = true;
+    m_dbgStrom[id]  = active;
+
+    if (!m_dbgOcc[id] && !m_dbgStrom[id])
+        m_dbgLastFreeMs[id] = millis();
+}
+
+void BlockController::debugClear(uint8_t id)
+{
+    if (!dbgIdOk(id)) return;
+
+    m_dbgActive[id]     = false;
+    m_dbgOcc[id]        = false;
+    m_dbgStrom[id]      = false;
+    m_dbgLastFreeMs[id] = millis();
+}
+#endif

@@ -32,6 +32,14 @@ public:
     }
 
     void setNothalt(bool on) override {
+        m_nothaltActive = on;
         digitalWrite(PIN_RELAY_NOTHALT, on ? LOW : HIGH);
     }
+
+    bool isNothaltActive() const {
+        return m_nothaltActive;
+    }
+    
+private:
+    bool m_nothaltActive = false;
 };
