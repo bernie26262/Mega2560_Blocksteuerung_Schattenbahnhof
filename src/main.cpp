@@ -219,6 +219,7 @@ void loop()
         if (c=='4') g_sbhf.onS14();
         if (c=='5') g_sbhf.onS15();
         if (c=='6') g_sbhf.onS16();
+        if (c=='r') g_sbhf.onResetAck();   // ← D3 RESET
     }
     #endif
 

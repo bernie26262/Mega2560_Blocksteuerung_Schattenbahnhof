@@ -4,6 +4,7 @@
 #include "Weiche.h"
 #include "safety.h"
 #include "Mega2PowerControl.h"
+#include "mega2_debug.h"
 
 // ============================================================
 // Externe Objekte
@@ -15,9 +16,14 @@ extern Weiche w15;
 
 extern Mega2PowerControl g_power;
 
-// ============================================================
 
-static constexpr uint32_t WEICHE_IMPULS_MS = 500;
+
+// ------------------------------------------------------------
+// Weichen-Zeiten (D2)
+// ------------------------------------------------------------
+static constexpr uint32_t WEICHE_IMPULS_MS    = 500;   // Spulenimpuls
+static constexpr uint32_t WEICHE_MIN_CHECK_MS = 500;   // frühester Ist-Check
+static constexpr uint32_t WEICHE_TIMEOUT_MS   = 2500;  // Hard-Error
 
 // ============================================================
 
@@ -66,6 +72,7 @@ void ShadowYardController::onS12()
     if (m_state == SBhfState::ExitRunning && m_currentGleis == 1)
     {
         g_power.setSbhfGleis(1, false);
+        m_exitPowerOn = false;
         m_state = SBhfState::Idle;
     }
 }
@@ -75,6 +82,7 @@ void ShadowYardController::onS13()
     if (m_state == SBhfState::ExitRunning && m_currentGleis == 2)
     {
         g_power.setSbhfGleis(2, false);
+        m_exitPowerOn = false;
         m_state = SBhfState::Idle;
     }
 }
@@ -84,20 +92,24 @@ void ShadowYardController::onS14()
     if (m_state == SBhfState::ExitRunning && m_currentGleis == 3)
     {
         g_power.setSbhfGleis(3, false);
+        m_exitPowerOn = false;
         m_state = SBhfState::Idle;
     }
 }
 
-void ShadowYardController::onS16()
+void ShadowYardController::onS15()
 {
-    g_power.setNothalt(false);
+    // NOT-AUS EIN
+    g_power.setNothalt(true);
     m_nothaltActive = true;
 }
 
-void ShadowYardController::onS15()
+void ShadowYardController::onS16()
 {
-    g_power.setNothalt(true);
-    m_nothaltActive = false;
+    // NOT-AUS AUS -> Hard-Error
+    g_power.setNothalt(false);
+    m_nothaltActive = true;
+    triggerHardError();
 }
 
 // ============================================================
@@ -109,18 +121,6 @@ void ShadowYardController::update(uint32_t nowMs)
     if (m_errorActive)
         return;
 
-    // ---------------- Parallelüberwachung Nothalt ----------------
-    if (m_nothaltActive)
-    {
-        bool stromBlock6 = m_bc && (m_bc->isOccupied(6));
-        if (!stromBlock6)
-        {
-            triggerHardError();
-            return;
-        }
-    }
-
-    // ---------------- State Machine ----------------
     switch (m_state)
     {
         case SBhfState::Idle:
@@ -136,7 +136,6 @@ void ShadowYardController::update(uint32_t nowMs)
             break;
 
         case SBhfState::WaitBlock6:
-            // 🔴 B3: zentrale Blockfreigabe
             if (!m_bc || !m_bc->canEnter(5, 6))
                 break;
 
@@ -181,7 +180,7 @@ uint8_t ShadowYardController::pickRandomGleisNoRepeat(uint8_t last)
 }
 
 // ============================================================
-// Weichenplan
+// Weichen
 // ============================================================
 
 void ShadowYardController::buildWeichenPlan(uint8_t gleis)
@@ -217,10 +216,6 @@ void ShadowYardController::buildWeichenPlan(uint8_t gleis)
     }
 }
 
-// ============================================================
-// Weichen-Sequencer
-// ============================================================
-
 void ShadowYardController::startWeichenSequence(uint32_t nowMs)
 {
     m_weichenIndex = 0;
@@ -241,45 +236,113 @@ void ShadowYardController::processWeichenSequence(uint32_t nowMs)
 
     switch (m_wphase)
     {
+        // --------------------------------------------------
+        // 1) Impuls auslösen
+        // --------------------------------------------------
         case WPhase::Idle:
-            if (sollAbzweig) w->setAbzweig();
-            else             w->setGerade();
+            if (sollAbzweig)
+                w->setAbzweig();
+            else
+                w->setGerade();
+
             m_wphase = WPhase::Impuls;
             m_phaseStartMs = nowMs;
             break;
 
+        // --------------------------------------------------
+        // 2) Impulsdauer abwarten
+        // --------------------------------------------------
         case WPhase::Impuls:
             if (nowMs - m_phaseStartMs >= WEICHE_IMPULS_MS)
+            {
+                // Ab jetzt beginnt die eigentliche Prüfzeit
                 m_wphase = WPhase::Check;
+                m_phaseStartMs = nowMs;
+            }
             break;
 
+        // --------------------------------------------------
+        // 3) Soll / Ist mit Zeitfenster prüfen
+        // --------------------------------------------------
         case WPhase::Check:
         {
+            uint32_t elapsed = nowMs - m_phaseStartMs;
+
+            // 3.1 Noch zu früh → Mechanik hat Zeit
+            if (elapsed < WEICHE_MIN_CHECK_MS)
+                return;
+
             bool istAbbiegen  = w->rueckmeldungAbbiegen();
             bool sollAbbiegen = (w->getStellung() == Weiche::ABBIEGEN);
 
-            if (istAbbiegen != sollAbbiegen)
+            // 3.2 Erfolg → nächste Weiche
+            if (istAbbiegen == sollAbbiegen)
             {
-                triggerHardError();
+                m_weichenIndex++;
+                m_wphase = WPhase::Idle;
                 return;
             }
 
-            m_weichenIndex++;
-            m_wphase = WPhase::Idle;
-            break;
+            // 3.3 Noch innerhalb Timeout → weiter warten
+            if (elapsed < WEICHE_TIMEOUT_MS)
+                return;
+
+            // 3.4 Timeout → HARD ERROR
+            triggerHardError();
+            return;
         }
     }
 }
 
+
 // ============================================================
-// Harter Fehler
+// Fehler / Reset (D3)
 // ============================================================
 
 void ShadowYardController::triggerHardError()
 {
+    if (m_errorActive)
+        return;
+
     m_errorActive = true;
     m_state = SBhfState::Error;
+    m_nothaltActive = true;     // ← 🔧 FEHLTE
 
-    // HART: Trafo oben + unten AUS
+    // HART: komplette Anlage stromlos
     safetySetEmergency(true);
+}
+
+bool ShadowYardController::canReset() const
+{
+    if (m_state != SBhfState::Error)
+        return false;
+
+    if (!m_nothaltActive)
+        return false;
+
+    if (m_exitPowerOn)
+        return false;
+
+    return true;
+}
+
+void ShadowYardController::resetError()
+{
+    m_errorActive   = false;
+    m_exitPowerOn  = false;
+    m_currentGleis = 0;
+}
+
+void ShadowYardController::onResetAck()
+{
+    if (!canReset())
+    {
+        DBG_PRINTLN("[SBHF] RESET ignored");
+        return;
+    }
+
+    DBG_PRINTLN("[SBHF] RESET acknowledged");
+
+    resetError();
+    m_state = SBhfState::Idle;
 }

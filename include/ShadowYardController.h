@@ -37,8 +37,11 @@ public:
     void onS12();
     void onS13();
     void onS14();
-    void onS15();
-    void onS16();
+    void onS15();   // NOT-AUS EIN
+    void onS16();   // NOT-AUS AUS / Hard-Error
+
+    // D3: Reset / Acknowledge
+    void onResetAck();
 
     // Status (Debug / Proto)
     SBhfState state() const { return m_state; }
@@ -57,8 +60,10 @@ private:
     void startWeichenSequence(uint32_t nowMs);
     void processWeichenSequence(uint32_t nowMs);
 
-    // ---------------- Fehler -------------------
+    // ---------------- Fehler / Reset -----------
     void triggerHardError();
+    bool canReset() const;
+    void resetError();
 
 private:
     BlockController* m_bc;
