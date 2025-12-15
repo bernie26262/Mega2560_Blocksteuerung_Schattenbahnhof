@@ -22,11 +22,16 @@
 #include "safety.h"
 #include "mega2_debug.h"
 #include "Mega2Debug.h"
+#include "Mega2Status.h"
 
 // ============================================================================
 // GLOBALE OBJEKTE
 // ============================================================================
-
+// Boot-ID: wird bei jedem Reset inkrementiert.
+// Ermöglicht es externen Clients (ESP/Web),
+// einen Controller-Neustart zuverlässig zu erkennen,
+// auch wenn die Verbindung kurzzeitig unterbrochen war.
+uint16_t g_bootId = 0;
 // --------------------- BLOCKS -----------------------------------------------
 Block* g_blocks[16];
 BlockController g_bc(g_blocks, 16);
@@ -109,6 +114,8 @@ ShadowYardController& shadowController = g_sbhf;
 
 // --------------------- PAYLOAD ----------------------------------------------
 Mega2Payload g_payload;
+// --------------------- SYSTEM STATUS (ESP read-only) -------------------------
+SystemStatus g_systemStatus;
 
 // ============================================================================
 // TIMER
@@ -193,6 +200,9 @@ static void dbgHandleSerial()
 // ============================================================================
 void setup()
 {
+    // Neue Boot-Instanz signalisieren
+    g_bootId++;
+    
     DBG_BEGIN(115200);
     while (!Serial && millis() < 1000) {}
 
@@ -258,7 +268,23 @@ void loop()
     if (now - lastPayloadUpdate >= PAYLOAD_UPDATE_MS)
     {
         lastPayloadUpdate = now;
+
+        // interner / Debug-Payload
         mega2_buildPayload(g_payload);
+
+        // externer, stabiler Systemstatus (ESP read-only)
+        buildMega2SystemStatus(g_systemStatus);
+
+    #if MEGA2_DEBUG
+        static uint8_t dbgDiv = 0;
+        if (++dbgDiv >= 10)
+        {
+            dbgDiv = 0;
+            Serial.print(F("SYS flags="));
+            Serial.println(g_systemStatus.flags, BIN);
+        }
+    #endif
+
         megaI2C_update();
     }
 }

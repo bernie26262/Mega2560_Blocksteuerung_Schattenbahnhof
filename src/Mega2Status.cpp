@@ -1,37 +1,72 @@
-#include "proto_mega2.h"
+#include "Mega2Status.h"
+
 #include "BlockController.h"
 #include "ShadowYardController.h"
+#include "safety.h"
+
+// globale Controller
+extern BlockController      g_bc;
+extern ShadowYardController g_sbhf;
+extern uint16_t             g_bootId;
 
 // --------------------------------------------------
 // SAFETY
 // --------------------------------------------------
 void buildMega2SafetyStatus(Mega2SafetyStatus& out)
 {
-    // Proto: nur notausActive
-    out.notausActive = false;
+    out.notausActive = safetyIsEmergencyActive();
+    out.ssrMask      = 0;   // aktuell ungenutzt
+    out.errorFlags   = 0;
 }
 
 // --------------------------------------------------
 // BLOCKS
 // --------------------------------------------------
-void buildMega2BlockStatus(BlockStatus* out, const BlockController& ctrl)
+void buildMega2BlockStatus(BlockStatus* out,
+                           const BlockController& bc)
 {
-    for (uint8_t i = 0; i < ctrl.count(); i++)
+    for (uint8_t i = 0; i < bc.count(); i++)
     {
-        out[i].besetzt    = ctrl.isOccupied(i);
-        out[i].stromRaw   = ctrl.stromFiltered(i);
+        out[i].besetzt  = bc.isOccupied(i);
+        out[i].stromRaw = bc.stromFiltered(i);
     }
 }
 
 // --------------------------------------------------
-// SHADOW YARD (Status-only, strikt Proto-konform)
+// SHADOW YARD
 // --------------------------------------------------
 void buildMega2ShadowStatus(ShadowYardStatus& out,
                             const ShadowYardController& sy)
 {
-    // Zustand
-    out.state = static_cast<uint8_t>(sy.state());
+    out.state         = static_cast<uint8_t>(sy.state());
+    out.ausfahrGleis  = sy.ausfahrGleis();
+}
 
-    // B2: einzig relevantes Gleis
-    out.ausfahrGleis = sy.ausfahrGleis();
+// --------------------------------------------------
+// SYSTEM STATUS (neu)
+// --------------------------------------------------
+void buildMega2SystemStatus(SystemStatus& out)
+{
+    out.version = SYSTEM_STATUS_VERSION;
+    out.nodeId  = NODE_MEGA2;
+    out.size    = sizeof(SystemStatus);
+
+    out.uptimeMs = millis();
+    out.bootId   = g_bootId;
+
+    out.flags = safetyIsEmergencyActive() ? SYS_NOTAUS_ACTIVE : SYS_OK;
+
+    out.blockOccupiedMask = 0;
+    for (uint8_t i = 1; i <= 9; i++)
+        if (g_bc.isOccupied(i))
+            out.blockOccupiedMask |= (1 << (i - 1));
+
+    out.sbhfState = static_cast<uint8_t>(g_sbhf.state());
+
+    out.sbhfOccupiedMask = 0;
+    for (uint8_t i = 0; i < 3; i++)
+        if (g_bc.isOccupied(7 + i))
+            out.sbhfOccupiedMask |= (1 << i);
+
+    out.reserved = 0;
 }

@@ -4,11 +4,17 @@
 #include "proto_mega2.h"
 #include <Wire.h>
 #include "Mega2I2C.h"
+#include "Mega2Status.h"
+#include "system/status_system.h"
 
 
 // globale Controller aus main.cpp
 extern BlockController& blockController;
 extern ShadowYardController& shadowController;
+// ------------------------------------------------------------
+// Externe Statusdaten (werden in main.cpp gebaut)
+// ------------------------------------------------------------
+extern SystemStatus g_systemStatus;
 
 // ------------------------------------------------------------
 // interner Zustand
@@ -31,6 +37,21 @@ void i2cOnReceive(int len)
 // ------------------------------------------------------------
 void i2cOnRequest()
 {
+    // --------------------------------------------------
+    // Default: kein Command → SystemStatus (read-only)
+    // --------------------------------------------------
+    if (s_pendingResponse == 0)
+    {
+        Wire.write(
+            reinterpret_cast<uint8_t*>(&g_systemStatus),
+            sizeof(SystemStatus)
+        );
+        return;
+    }
+
+    // --------------------------------------------------
+    // Command-basierte Antworten (bestehend)
+    // --------------------------------------------------
     switch (s_pendingResponse)
     {
         case CMD_GET_M2_SAFETY:
@@ -61,8 +82,10 @@ void i2cOnRequest()
             break;
     }
 
+    // Command abgearbeitet
     s_pendingResponse = 0;
 }
+
 
 // --------------------------------------------------
 // Initialisierung I2C (Slave)

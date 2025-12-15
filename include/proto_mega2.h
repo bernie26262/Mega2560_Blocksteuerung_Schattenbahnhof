@@ -29,6 +29,4 @@ struct Mega2Payload {
 };
 
 void mega2_buildPayload(Mega2Payload& p);
-void buildMega2SafetyStatus(Mega2SafetyStatus& out);
-void buildMega2BlockStatus(BlockStatus* out, const BlockController& bc);
-void buildMega2ShadowStatus(ShadowYardStatus& out, const ShadowYardController& sy);
+
