@@ -1,5 +1,7 @@
 #include "Mega2Status.h"
 
+#include <Arduino.h>
+
 #include "BlockController.h"
 #include "ShadowYardController.h"
 #include "safety.h"
@@ -38,8 +40,8 @@ void buildMega2BlockStatus(BlockStatus* out,
 void buildMega2ShadowStatus(ShadowYardStatus& out,
                             const ShadowYardController& sy)
 {
-    out.state         = static_cast<uint8_t>(sy.state());
-    out.ausfahrGleis  = sy.ausfahrGleis();
+    out.state        = static_cast<uint8_t>(sy.state());
+    out.ausfahrGleis = sy.ausfahrGleis();
 }
 
 // --------------------------------------------------
@@ -54,13 +56,28 @@ void buildMega2SystemStatus(SystemStatus& out)
     out.uptimeMs = millis();
     out.bootId   = g_bootId;
 
-    out.flags = safetyIsEmergencyActive() ? SYS_NOTAUS_ACTIVE : SYS_OK;
+    // -----------------------------
+    // FLAGS sauber aufbauen
+    // -----------------------------
+    out.flags = SYS_OK;
 
+    if (safetyIsEmergencyActive())
+        out.flags |= SYS_NOTAUS_ACTIVE;
+
+    if (safetyIsPowerOn())
+        out.flags |= SYS_POWER_ON;
+
+    // -----------------------------
+    // Blockbelegung
+    // -----------------------------
     out.blockOccupiedMask = 0;
     for (uint8_t i = 1; i <= 9; i++)
         if (g_bc.isOccupied(i))
             out.blockOccupiedMask |= (1 << (i - 1));
 
+    // -----------------------------
+    // Schattenbahnhof
+    // -----------------------------
     out.sbhfState = static_cast<uint8_t>(g_sbhf.state());
 
     out.sbhfOccupiedMask = 0;

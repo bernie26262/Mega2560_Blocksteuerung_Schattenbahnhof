@@ -20,3 +20,11 @@ bool safetyResetEmergency();
 
 // Hardware-nahe Aktion
 void safetySetSSR(SafetySSR ssr, bool enable);
+
+// Explizites Wiedereinschalten der Leistung (SSR)
+// Liefert false, wenn Safety-Bedingungen nicht erfüllt sind
+bool safetyPowerOn();
+
+bool safetyIsSSR(SafetySSR ssr);
+
+bool safetyIsPowerOn();

@@ -142,19 +142,45 @@ static void dbgProcessLine(const char* line)
     if (!line || !line[0]) return;
 
     // Single keys
-    if (line[1] == '\0')
+    // Single keys
+if (line[1] == '\0')
+{
+    char c = line[0];
+
+    // Shadow yard debug
+    if (c=='1') g_sbhf.onS11();
+    if (c=='2') g_sbhf.onS12();
+    if (c=='3') g_sbhf.onS13();
+    if (c=='4') g_sbhf.onS14();
+    if (c=='5') g_sbhf.onS15();
+    if (c=='6') g_sbhf.onS16();
+    if (c=='r') g_sbhf.onResetAck();
+    if (c=='d') mega2DebugDump();
+
+    // -----------------------------
+    // SAFETY DEBUG (M2.1)
+    // -----------------------------
+    if (c == 'p')
     {
-        char c = line[0];
-        if (c=='1') g_sbhf.onS11();
-        if (c=='2') g_sbhf.onS12();
-        if (c=='3') g_sbhf.onS13();
-        if (c=='4') g_sbhf.onS14();
-        if (c=='5') g_sbhf.onS15();
-        if (c=='6') g_sbhf.onS16();
-        if (c=='r') g_sbhf.onResetAck();
-        if (c=='d') mega2DebugDump();
-        return;
+        bool ok = safetyPowerOn();
+        DBG_PRINTLN(ok ? "[DBG] POWER ON OK" : "[DBG] POWER ON BLOCKED");
     }
+
+    if (c == 'n')
+    {
+        safetySetEmergency(true);
+        DBG_PRINTLN("[DBG] NOTHALT");
+    }
+
+    if (c == 'a')
+    {
+        safetyResetEmergency();
+        DBG_PRINTLN("[DBG] ACK");
+    }
+
+    return;
+}
+
 
     char cmd = line[0];
     int n = atoi(&line[1]);
@@ -178,19 +204,47 @@ static void dbgProcessLine(const char* line)
 
 static void dbgHandleSerial()
 {
+     if (Serial.available())
+    {
+        Serial.println("[DBG] SERIAL INPUT DETECTED");
+    }
+
     while (Serial.available())
     {
         char ch = Serial.read();
+        Serial.print("[DBG] CHAR=");
+        Serial.println(ch);
+
+        // ---------------------------------
+        // SOFORTREAKTION für Single Keys
+        // ---------------------------------
+        if (ch == 'p' || ch == 'n' || ch == 'a' ||
+            (ch >= '1' && ch <= '6') ||
+            ch == 'r' || ch == 'd')
+        {
+            char tmp[2] = { ch, 0 };
+            dbgProcessLine(tmp);
+            s_dbgLen = 0;
+            continue;
+        }
+
+        // ---------------------------------
+        // Klassischer Zeilenmodus
+        // ---------------------------------
         if (ch == '\n' || ch == '\r')
         {
             s_dbgBuf[s_dbgLen] = 0;
-            if (s_dbgLen) dbgProcessLine(s_dbgBuf);
+            if (s_dbgLen)
+                dbgProcessLine(s_dbgBuf);
             s_dbgLen = 0;
         }
-        else if (s_dbgLen < sizeof(s_dbgBuf)-1)
+        else if (s_dbgLen < sizeof(s_dbgBuf) - 1)
+        {
             s_dbgBuf[s_dbgLen++] = ch;
+        }
     }
 }
+
 #else
     DBG_PRINTLN("[DBG] Block debug disabled");
 #endif
@@ -205,8 +259,6 @@ void setup()
     
     DBG_BEGIN(115200);
     while (!Serial && millis() < 1000) {}
-
-    Serial.println(F("\n=== Mega2 Schattenbahnhof startet ==="));
 
     safetyBegin();
 

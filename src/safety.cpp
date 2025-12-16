@@ -6,7 +6,15 @@
 // Interner Zustand
 // --------------------------------------------------
 
+// Akuter Not-Aus (Taste gedrückt / sofortige Abschaltung)
 static bool s_emergencyActive = false;
+
+// Latenter Safety-Lock: nach einem Safety-Ereignis muss quittiert werden,
+// bevor wieder eingeschaltet werden darf.
+static bool s_safetyLocked = true; // sicherer Default: nach Boot erst quittieren
+
+// interner Merker für SSR-Zustand
+static bool s_ssrState[2] = { false, false };
 
 // --------------------------------------------------
 // Initialisierung
@@ -22,6 +30,7 @@ void safetyBegin()
     safetySetSSR(SafetySSR::SSR_TRAFO_B, false);
 
     s_emergencyActive = false;
+    s_safetyLocked    = true;   // Boot -> erst ACK, dann PowerOn (sicher)
 }
 
 // --------------------------------------------------
@@ -31,8 +40,6 @@ void safetyBegin()
 void safetyUpdate()
 {
     // aktuell keine externe Quelle
-    // Not-Aus wird ausschließlich über safetySetEmergency(...)
-    // oder safetyResetEmergency() beeinflusst
 }
 
 // --------------------------------------------------
@@ -44,40 +51,55 @@ bool safetyIsEmergencyActive()
     return s_emergencyActive;
 }
 
+bool safetyIsSSR(SafetySSR ssr)
+{
+    return s_ssrState[static_cast<uint8_t>(ssr)];
+}
+
+bool safetyIsPowerOn()
+{
+    return safetyIsSSR(SafetySSR::SSR_TRAFO_A)
+        && safetyIsSSR(SafetySSR::SSR_TRAFO_B);
+}
+
+// Optional (nur falls du es im Status/Debug später anzeigen willst)
+// bool safetyIsLocked() { return s_safetyLocked; }
+
 // --------------------------------------------------
 // Aktionen
 // --------------------------------------------------
 
 void safetySetEmergency(bool active)
 {
-    s_emergencyActive = active;
-
-    if (s_emergencyActive)
+    // Nur beim Aktivieren: Lock setzen und hart abschalten
+    if (active)
     {
+        s_emergencyActive = true;
+        s_safetyLocked    = true; // 🔒 Lock bleibt bis ACK
+
         // Harte Abschaltung beider Trafos
         safetySetSSR(SafetySSR::SSR_TRAFO_A, false);
         safetySetSSR(SafetySSR::SSR_TRAFO_B, false);
+        return;
     }
+
+    // Deaktivieren (z.B. Not-Aus losgelassen):
+    // Emergency kann weg sein, aber Lock bleibt!
+    s_emergencyActive = false;
 }
 
 // --------------------------------------------------
-// B3.1 – Quittierung / Reset
+// Quittierung / Reset
 // --------------------------------------------------
 
 bool safetyResetEmergency()
 {
-    if (!s_emergencyActive)
-        return true;   // nichts zu tun
-
-    // Hier später Bedingungen möglich:
-    // - alle Controller Idle
-    // - kein Block besetzt
-    // - UI-Bestätigung etc.
-
+    // ACK quittiert den latenten Lock, unabhängig davon,
+    // ob emergencyActive gerade noch true ist.
     s_emergencyActive = false;
+    s_safetyLocked    = false;  // 🔑 Lock lösen
 
-    // WICHTIG:
-    // KEIN automatisches Wiedereinschalten der SSR!
+    // WICHTIG: KEIN automatisches Wiedereinschalten der SSR!
     return true;
 }
 
@@ -87,9 +109,12 @@ bool safetyResetEmergency()
 
 void safetySetSSR(SafetySSR ssr, bool enable)
 {
+    s_ssrState[static_cast<uint8_t>(ssr)] = enable;
+
     switch (ssr)
     {
         case SafetySSR::SSR_TRAFO_A:
+            // aktiv-low Cut-Relais: LOW = durchschalten, HIGH = cut
             digitalWrite(PIN_RELAY_TRAFO_OBEN_CUT, enable ? LOW : HIGH);
             break;
 
@@ -100,4 +125,24 @@ void safetySetSSR(SafetySSR ssr, bool enable)
         default:
             break;
     }
+}
+
+// --------------------------------------------------
+// Explizites Wiedereinschalten der Leistung
+// --------------------------------------------------
+
+bool safetyPowerOn()
+{
+    // Darf nur erfolgen, wenn KEIN Not-Aus aktiv ist
+    if (s_emergencyActive)
+        return false;
+
+    // Darf nur erfolgen, wenn Safety quittiert wurde
+    if (s_safetyLocked)
+        return false;
+
+    safetySetSSR(SafetySSR::SSR_TRAFO_A, true);
+    safetySetSSR(SafetySSR::SSR_TRAFO_B, true);
+
+    return true;
 }

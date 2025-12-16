@@ -16,6 +16,7 @@ enum : uint8_t
     M2_CMD_SET_NOTAUS         = 0x10, // [cmd, 0/1]
     M2_CMD_SET_SSR            = 0x11, // [cmd, ssrIndex, 0/1]
     M2_CMD_ACK_ERROR          = 0x12, // [cmd, mask]
+    M2_CMD_POWER_ON           = 0x13,   // explizit: Leistung EIN
 
     // --- Status Abfragen (read-only) ---
     M2_CMD_GET_SAFETY_STATUS  = 0x20, // -> Mega2SafetyStatus
