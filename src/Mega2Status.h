@@ -13,3 +13,4 @@ void buildMega2ShadowStatus(ShadowYardStatus& out, const ShadowYardController& s
 
 // Neuer Builder (Systemstatus)
 void buildMega2SystemStatus(SystemStatus& out);
+

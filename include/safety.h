@@ -28,3 +28,5 @@ bool safetyPowerOn();
 bool safetyIsSSR(SafetySSR ssr);
 
 bool safetyIsPowerOn();
+
+bool safetyIsLocked();

@@ -1,6 +1,7 @@
 #include "safety.h"
 #include "mega2_pins.h"
 #include <Arduino.h>
+#include "safety_error.h"
 
 // --------------------------------------------------
 // Interner Zustand
@@ -71,20 +72,19 @@ bool safetyIsPowerOn()
 
 void safetySetEmergency(bool active)
 {
-    // Nur beim Aktivieren: Lock setzen und hart abschalten
     if (active)
     {
         s_emergencyActive = true;
-        s_safetyLocked    = true; // 🔒 Lock bleibt bis ACK
+        s_safetyLocked    = true;
 
-        // Harte Abschaltung beider Trafos
         safetySetSSR(SafetySSR::SSR_TRAFO_A, false);
         safetySetSSR(SafetySSR::SSR_TRAFO_B, false);
+
+        // 🔴 Fehlertext setzen
+        safetyErrorSet(SAFETY_ERR_NOTAUS, 0);
         return;
     }
 
-    // Deaktivieren (z.B. Not-Aus losgelassen):
-    // Emergency kann weg sein, aber Lock bleibt!
     s_emergencyActive = false;
 }
 
@@ -94,12 +94,11 @@ void safetySetEmergency(bool active)
 
 bool safetyResetEmergency()
 {
-    // ACK quittiert den latenten Lock, unabhängig davon,
-    // ob emergencyActive gerade noch true ist.
     s_emergencyActive = false;
-    s_safetyLocked    = false;  // 🔑 Lock lösen
+    s_safetyLocked    = false;
 
-    // WICHTIG: KEIN automatisches Wiedereinschalten der SSR!
+    // 🔑 Fehler quittieren
+    safetyErrorClear();
     return true;
 }
 
@@ -145,4 +144,9 @@ bool safetyPowerOn()
     safetySetSSR(SafetySSR::SSR_TRAFO_B, true);
 
     return true;
+}
+
+bool safetyIsLocked()
+{
+    return s_safetyLocked;
 }

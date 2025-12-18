@@ -28,6 +28,9 @@ public:
     void debugClear(uint8_t id);
 #endif
 
+// Wird später vom Kurzschluss-Detektor aufgerufen
+void onShortCircuit(uint8_t block);
+
 private:
     Block**  m_blocks;
     uint8_t  m_count;
@@ -44,3 +47,5 @@ private:
     uint32_t m_dbgLastFreeMs[16];
 #endif
 };
+
+void onShortCircuit(uint8_t block);

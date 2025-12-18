@@ -5,6 +5,7 @@
 #include "BlockController.h"
 #include "ShadowYardController.h"
 #include "safety.h"
+#include "safety_error.h"
 
 // globale Controller
 extern BlockController      g_bc;
@@ -57,18 +58,28 @@ void buildMega2SystemStatus(SystemStatus& out)
     out.bootId   = g_bootId;
 
     // -----------------------------
-    // FLAGS sauber aufbauen
+    // FLAGS
     // -----------------------------
     out.flags = SYS_OK;
 
     if (safetyIsEmergencyActive())
         out.flags |= SYS_NOTAUS_ACTIVE;
 
+    if (safetyIsLocked())
+        out.flags |= SYS_ERROR_PRESENT;
+
     if (safetyIsPowerOn())
         out.flags |= SYS_POWER_ON;
 
     // -----------------------------
-    // Blockbelegung
+    // SAFETY ERROR DETAILS (NEU)
+    // -----------------------------
+    const SafetyErrorInfo& err = safetyErrorGet();
+    out.safetyErrorType  = static_cast<uint8_t>(err.type);
+    out.safetyErrorIndex = err.index;
+
+    // -----------------------------
+    // BLOCKS
     // -----------------------------
     out.blockOccupiedMask = 0;
     for (uint8_t i = 1; i <= 9; i++)
@@ -76,7 +87,7 @@ void buildMega2SystemStatus(SystemStatus& out)
             out.blockOccupiedMask |= (1 << (i - 1));
 
     // -----------------------------
-    // Schattenbahnhof
+    // SCHATTENBAHNHOF
     // -----------------------------
     out.sbhfState = static_cast<uint8_t>(g_sbhf.state());
 

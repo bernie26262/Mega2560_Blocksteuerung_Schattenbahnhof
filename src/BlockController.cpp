@@ -1,6 +1,8 @@
 #include "BlockController.h"
 #include "Block.h"
 #include "mega2_debug.h"
+#include "safety_error.h"
+#include "safety.h"
 
 #if MEGA2_DEBUG
 static constexpr uint8_t  DBG_MIN_ID = 1;
@@ -179,3 +181,12 @@ void BlockController::debugClear(uint8_t id)
     m_dbgLastFreeMs[id] = millis();
 }
 #endif
+
+// Wird später vom Stromsensor / Kurzschluss-Detektor aufgerufen
+// Aktuell noch NICHT aktiv verdrahtet
+void BlockController::onShortCircuit(uint8_t block)
+{
+    // Noch nicht aktiv verwendet!
+    safetyErrorSet(SAFETY_ERR_BLOCK_SHORT, block);
+    safetySetEmergency(true);
+}

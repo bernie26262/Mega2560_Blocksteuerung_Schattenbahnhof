@@ -4,7 +4,7 @@
 // =====================================================
 // Versionierung
 // =====================================================
-static constexpr uint8_t SYSTEM_STATUS_VERSION = 1;
+static constexpr uint8_t SYSTEM_STATUS_VERSION = 2;
 
 // =====================================================
 // Controller-ID
@@ -41,6 +41,12 @@ struct SystemStatus
     uint16_t bootId;
 
     uint16_t flags;
+
+    // -----------------------------
+    // SAFETY ERROR DETAILS
+    // -----------------------------
+    uint8_t  safetyErrorType;
+    uint8_t  safetyErrorIndex;
 
     uint16_t blockOccupiedMask;
 

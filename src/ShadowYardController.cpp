@@ -5,6 +5,7 @@
 #include "safety.h"
 #include "Mega2PowerControl.h"
 #include "mega2_debug.h"
+#include "safety_error.h"
 
 // ============================================================
 // Externe Objekte
@@ -360,7 +361,9 @@ void ShadowYardController::triggerHardError()
     m_errorActive = true;
     m_state = SBhfState::Error;
 
-    // HART: komplette Anlage stromlos
+    // 🔴 Fehler: SBHF-Weiche
+    safetyErrorSet(SAFETY_ERR_SBH_WEICHE, m_weichenIndex + 1);
+
     safetySetEmergency(true);
 }
 
