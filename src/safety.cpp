@@ -8,14 +8,18 @@
 // --------------------------------------------------
 
 // Akuter Not-Aus (Taste gedrückt / sofortige Abschaltung)
+
 static bool s_emergencyActive = false;
 
 // Latenter Safety-Lock: nach einem Safety-Ereignis muss quittiert werden,
 // bevor wieder eingeschaltet werden darf.
-static bool s_safetyLocked = true; // sicherer Default: nach Boot erst quittieren
+
 
 // interner Merker für SSR-Zustand
 static bool s_ssrState[2] = { false, false };
+
+
+static SafetyBlockReason s_blockReason = SAFETY_BLOCK_BOOT;
 
 // --------------------------------------------------
 // Initialisierung
@@ -31,7 +35,9 @@ void safetyBegin()
     safetySetSSR(SafetySSR::SSR_TRAFO_B, false);
 
     s_emergencyActive = false;
-    s_safetyLocked    = true;   // Boot -> erst ACK, dann PowerOn (sicher)
+
+    // Boot-Zustand: Start gesperrt, aber kein Not-Aus
+    s_blockReason = SAFETY_BLOCK_BOOT;
 }
 
 // --------------------------------------------------
@@ -49,7 +55,7 @@ void safetyUpdate()
 
 bool safetyIsEmergencyActive()
 {
-    return s_emergencyActive;
+    return s_blockReason == SAFETY_BLOCK_EMERGENCY;
 }
 
 bool safetyIsSSR(SafetySSR ssr)
@@ -63,6 +69,17 @@ bool safetyIsPowerOn()
         && safetyIsSSR(SafetySSR::SSR_TRAFO_B);
 }
 
+bool safetyIsLocked()
+{
+    return s_blockReason != SAFETY_BLOCK_NONE;
+}
+
+uint8_t safetyGetBlockReason()
+{
+    return static_cast<uint8_t>(s_blockReason);
+}
+
+
 // Optional (nur falls du es im Status/Debug später anzeigen willst)
 // bool safetyIsLocked() { return s_safetyLocked; }
 
@@ -75,12 +92,11 @@ void safetySetEmergency(bool active)
     if (active)
     {
         s_emergencyActive = true;
-        s_safetyLocked    = true;
+        s_blockReason     = SAFETY_BLOCK_EMERGENCY;
 
         safetySetSSR(SafetySSR::SSR_TRAFO_A, false);
         safetySetSSR(SafetySSR::SSR_TRAFO_B, false);
 
-        // 🔴 Fehlertext setzen
         safetyErrorSet(SAFETY_ERR_NOTAUS, 0);
         return;
     }
@@ -95,9 +111,8 @@ void safetySetEmergency(bool active)
 bool safetyResetEmergency()
 {
     s_emergencyActive = false;
-    s_safetyLocked    = false;
+    s_blockReason     = SAFETY_BLOCK_NONE;
 
-    // 🔑 Fehler quittieren
     safetyErrorClear();
     return true;
 }
@@ -132,12 +147,12 @@ void safetySetSSR(SafetySSR ssr, bool enable)
 
 bool safetyPowerOn()
 {
-    // Darf nur erfolgen, wenn KEIN Not-Aus aktiv ist
+    // echter Not-Aus blockiert immer
     if (s_emergencyActive)
         return false;
 
-    // Darf nur erfolgen, wenn Safety quittiert wurde
-    if (s_safetyLocked)
+    // jegliche Blockade (Boot oder Emergency) blockiert PowerOn
+    if (s_blockReason != SAFETY_BLOCK_NONE)
         return false;
 
     safetySetSSR(SafetySSR::SSR_TRAFO_A, true);
@@ -146,7 +161,3 @@ bool safetyPowerOn()
     return true;
 }
 
-bool safetyIsLocked()
-{
-    return s_safetyLocked;
-}

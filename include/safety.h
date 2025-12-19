@@ -30,3 +30,5 @@ bool safetyIsSSR(SafetySSR ssr);
 bool safetyIsPowerOn();
 
 bool safetyIsLocked();
+
+uint8_t safetyGetBlockReason();

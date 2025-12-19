@@ -38,11 +38,21 @@ enum SafetySSR : uint8_t
 // =====================================================
 //  Safety-Status (global, klein)
 // =====================================================
+
+enum SafetyBlockReason : uint8_t
+{
+    SAFETY_BLOCK_NONE      = 0,
+    SAFETY_BLOCK_BOOT      = 1,
+    SAFETY_BLOCK_EMERGENCY = 2
+};
+
 struct Mega2SafetyStatus
 {
     uint8_t notausActive;   // 0/1
     uint8_t ssrMask;        // Bit0=MAIN, Bit1=TRAFO_A, Bit2=TRAFO_B
     uint8_t errorFlags;     // global (z.B. Safety, I2C, Kurzschluss)
+
+    uint8_t blockReason;    // NEU: siehe SafetyBlockReason
 };
 
 // =====================================================

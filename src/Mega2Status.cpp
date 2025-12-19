@@ -17,9 +17,19 @@ extern uint16_t             g_bootId;
 // --------------------------------------------------
 void buildMega2SafetyStatus(Mega2SafetyStatus& out)
 {
-    out.notausActive = safetyIsEmergencyActive();
-    out.ssrMask      = 0;   // aktuell ungenutzt
-    out.errorFlags   = 0;
+    out.notausActive = safetyIsEmergencyActive() ? 1 : 0;
+
+    // SSR Ist-Zustand abbilden
+    out.ssrMask =
+        (safetyIsSSR(SSR_MAIN_ENABLE) ? 0x01 : 0) |
+        (safetyIsSSR(SSR_TRAFO_A)     ? 0x02 : 0) |
+        (safetyIsSSR(SSR_TRAFO_B)     ? 0x04 : 0);
+
+    // globale Safety-Fehlerflags
+    out.errorFlags = safetyIsEmergencyActive() ? 1 : 0;
+
+    // NEU: Block-Grund (BOOT / EMERGENCY / NONE)
+    out.blockReason = safetyGetBlockReason();
 }
 
 // --------------------------------------------------
