@@ -117,6 +117,37 @@ Mega2Payload g_payload;
 // --------------------- SYSTEM STATUS (ESP read-only) -------------------------
 SystemStatus g_systemStatus;
 
+
+// ============================================================================
+// SBHF SENSOR DISPATCH (S11..S16)
+// - flankenbasiert via PulseSensor::fellEdge()
+// - zentraler Ort, um Safety-Gates ohne Seiteneffekte zu erzwingen
+// ============================================================================
+static void pollSbhfSensors()
+{
+    // Immer erst Flanken einlesen, damit keine "alten" Events nach einem Unblock nachlaufen.
+    const bool e11 = g_s11.fellEdge();
+    const bool e12 = g_s12.fellEdge();
+    const bool e13 = g_s13.fellEdge();
+    const bool e14 = g_s14.fellEdge();
+    const bool e15 = g_s15.fellEdge();
+    const bool e16 = g_s16.fellEdge();
+
+    // Safety-Gate: wenn SBhf gesperrt ist, werden ALLE S11..S16 Events ignoriert.
+    // (Damit gilt die Safety-Logik explizit auch für S12..S16.)
+    if (g_sbhf.isSafetyBlocked())
+        return;
+
+    // Dispatch
+    if (e15) g_sbhf.onS15();
+    if (e16) g_sbhf.onS16();
+    if (e11) g_sbhf.onS11();
+    if (e12) g_sbhf.onS12();
+    if (e13) g_sbhf.onS13();
+    if (e14) g_sbhf.onS14();
+}
+
+
 // ============================================================================
 // TIMER
 // ============================================================================
@@ -297,6 +328,9 @@ void loop()
 #endif
 
     safetyUpdate();
+
+    // Hardware-Events (S11..S16) -> SBhf-State-Machine
+    pollSbhfSensors();
 
     if (now - lastBlockUpdate >= BLOCK_UPDATE_MS)
     {

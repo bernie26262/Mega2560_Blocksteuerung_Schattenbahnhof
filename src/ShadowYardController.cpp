@@ -37,7 +37,10 @@ ShadowYardController::ShadowYardController(BlockController* bc)
   m_wphase(WPhase::Idle),
   m_phaseStartMs(0),
   m_errorActive(false),
-  m_exitPowerOn(false)
+  m_exitPowerOn(false),
+  m_resumePending(false),
+  m_resumeGleis(0),
+  m_resumeState(SBhfState::Idle)
 {
 }
 
@@ -48,6 +51,10 @@ void ShadowYardController::begin()
     m_nextGleis = 1;
     m_errorActive = false;
     m_exitPowerOn = false;
+
+    m_resumePending = false;
+    m_resumeGleis = 0;
+    m_resumeState = SBhfState::Idle;
 
     m_weichenCount = 0;
     m_weichenIndex = 0;
@@ -72,6 +79,13 @@ bool ShadowYardController::weicheSoll(uint8_t idx) const
     return m_weichenSollAbzweig[idx];
 }
 
+bool ShadowYardController::isSafetyBlocked() const
+{
+    // Minimaler, deterministischer Gate: sobald SBhf im Error ist, keine Sensor-Events mehr.
+    // (Weitere globale Safety-Gates können später ergänzt werden, z.B. selftestRunning / safetyLock).
+    return (m_state == SBhfState::Error) || m_errorActive;
+}
+
 // ============================================================
 // Events
 // ============================================================
@@ -80,7 +94,7 @@ void ShadowYardController::onS11()
 {
     if (m_state == SBhfState::Error)
     {
-        DBG_PRINTLN("[SBHF] S11 ignored (ERROR-LOCK)");
+        DBG_PRINTLN("[SBHF] S11 ignored because SBhfState::Error");
         return;
     }
 
@@ -358,6 +372,19 @@ void ShadowYardController::triggerHardError()
     if (m_errorActive)
         return;
 
+    // --------------------------------------------------------
+    // Checkpoint: Wenn S11 bereits akzeptiert wurde, merken wir uns den Fortsetzpunkt.
+    // Hintergrund: S11 wird flankenbasiert ausgewertet. Steht der Zug nach NOTAUS auf S11,
+    // kommt kein neuer Trigger. Dann muss die SBhf-State-Machine nach ACK/Selbsttest fortsetzen können.
+    // --------------------------------------------------------
+    if (m_state != SBhfState::Idle && m_state != SBhfState::Error && m_currentGleis != 0)
+    {
+        m_resumePending = true;
+        m_resumeGleis   = m_currentGleis;
+        // Safest Resume: Weichenplan neu aufbauen und Sequenz neu starten.
+        m_resumeState   = SBhfState::PrepareExit;
+    }
+
     m_errorActive = true;
     m_state = SBhfState::Error;
 
@@ -405,6 +432,29 @@ void ShadowYardController::onResetAck()
 
     DBG_PRINTLN("[SBHF] RESET acknowledged");
 
+    // Resume-Infos sichern, weil resetError() m_currentGleis löscht
+    const bool resume = m_resumePending && (m_resumeGleis >= 1 && m_resumeGleis <= 3);
+    const uint8_t gleis = m_resumeGleis;
+    const SBhfState st = m_resumeState;
+
     resetError();
-    m_state = SBhfState::Idle;
+
+    if (resume)
+    {
+        m_currentGleis = gleis;
+        buildWeichenPlan(m_currentGleis);
+        m_state = st;
+
+        // Checkpoint verbrauchen
+        m_resumePending = false;
+        m_resumeGleis = 0;
+        m_resumeState = SBhfState::Idle;
+
+        DBG_PRINTLN("[SBHF] Resuming after reset from checkpoint");
+    }
+    else
+    {
+        m_state = SBhfState::Idle;
+    }
 }
+

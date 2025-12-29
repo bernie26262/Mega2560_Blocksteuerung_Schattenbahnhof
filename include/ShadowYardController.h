@@ -47,6 +47,10 @@ public:
     SBhfState state() const { return m_state; }
     uint8_t   ausfahrGleis() const { return m_currentGleis; }
 
+    // Gate für Sensor-Dispatch (S11..S16):
+    // true => keine Sensor-Events in die SBhf-Logik einspeisen (SafetyLock / Error / Selftest)
+    bool isSafetyBlocked() const;
+
     // Modus (vorbereitet für ESP)
     void setMode(SbhfMode m) { m_mode = m; }
 
@@ -96,4 +100,12 @@ private:
     // Flags
     bool m_errorActive;
     bool m_exitPowerOn;
+
+    // --------------------------------------------------------
+    // Resume-Checkpoint (damit nach NOTAUS/ACK kein erneutes S11 nötig ist)
+    // Wird bei HARD-ERROR gesetzt, wenn ein Run bereits gestartet war.
+    // --------------------------------------------------------
+    bool     m_resumePending;
+    uint8_t  m_resumeGleis;
+    SBhfState m_resumeState;
 };
