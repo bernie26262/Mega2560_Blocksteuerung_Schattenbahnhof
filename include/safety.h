@@ -1,6 +1,11 @@
 #pragma once
 
 #include <Arduino.h>
+
+// 0 = Hardware, 1 = Simulation (Debug ohne Anlage)
+#ifndef MEGA2_SIM_MODE
+#define MEGA2_SIM_MODE 0
+#endif
 #include "proto_common.h"
 
 // Initialisierung

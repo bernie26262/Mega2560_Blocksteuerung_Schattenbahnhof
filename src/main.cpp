@@ -1,4 +1,8 @@
 #include <Arduino.h>
+
+#ifndef MEGA2_SIM_MODE
+#define MEGA2_SIM_MODE 0
+#endif
 #include <Wire.h>
 
 #include "mega2_pins.h"
@@ -69,9 +73,7 @@ SensorStrom stromSbhf1(PIN_ADC_SBH_GL1);
 SensorStrom stromSbhf2(PIN_ADC_SBH_GL2);
 SensorStrom stromSbhf3(PIN_ADC_SBH_GL3);
 
-
 // --------------------- TRAFO-SPANNUNG (ZMPT101B) ----------------------------
-// Hinweis: Pin-Makros müssen in mega2_pins.h definiert sein.
 SensorTrafoAC g_trafoOben(PIN_ADC_TRAFO_OBEN);
 SensorTrafoAC g_trafoUnten(PIN_ADC_TRAFO_UNTEN);
 
@@ -154,32 +156,44 @@ if (line[1] == '\0')
     char c = line[0];
 
     // Shadow yard debug
+#if MEGA2_SIM_MODE
     if (c=='1') g_sbhf.onS11();
     if (c=='2') g_sbhf.onS12();
     if (c=='3') g_sbhf.onS13();
     if (c=='4') g_sbhf.onS14();
     if (c=='5') g_sbhf.onS15();
     if (c=='6') g_sbhf.onS16();
+#else
+    if (c>='1' && c<='6')
+    {
+        DBG_PRINTLN("[DBG] SIM sensor keys disabled (MEGA2_SIM_MODE=0)");
+    }
+#endif
     if (c=='r') g_sbhf.onResetAck();
     if (c=='d') mega2DebugDump();
 
-    // Trafo-Spannung Debug (ZMPT101B)
+    // Trafo-Diagnose
     if (c=='t')
     {
         g_trafoOben.printDebug("Trafo oben");
         g_trafoUnten.printDebug("Trafo unten");
-        DBG_PRINTLN(safetyDebugIsTrafoUntenForced()
-            ? "[DBG] Trafo unten FORCED=ON"
-            : "[DBG] Trafo unten FORCED=OFF");
+        DBG_PRINTLN(safetyDebugIsTrafoUntenForced() ? "[DBG] Trafo unten FORCED=ON" : "[DBG] Trafo unten FORCED=OFF");
     }
 
-    // Debug-Override: Trafo unten "powered" erzwingen (ohne Hardware)
+#if MEGA2_SIM_MODE
     if (c=='T')
     {
-        const bool on = !safetyDebugIsTrafoUntenForced();
+        static bool on = false;
+        on = !on;
         safetyDebugForceTrafoUntenPowered(on);
         DBG_PRINTLN(on ? "[DBG] Trafo unten FORCE ON" : "[DBG] Trafo unten FORCE OFF");
     }
+#else
+    if (c=='T')
+    {
+        DBG_PRINTLN("[DBG] Trafo-FORCE disabled (MEGA2_SIM_MODE=0)");
+    }
+#endif
 
     // -----------------------------
     // SAFETY DEBUG (M2.1)
@@ -200,8 +214,6 @@ if (line[1] == '\0')
     {
         const bool ok = safetyResetEmergency();
         DBG_PRINTLN(ok ? "[DBG] ACK OK" : "[DBG] ACK BLOCKED");
-
-        // Optional: SBHF-Reset (nur wirksam, wenn SBHF wirklich im Error ist)
         g_sbhf.onResetAck();
     }
 
@@ -217,6 +229,14 @@ if (line[1] == '\0')
         DBG_PRINTLN("[DBG] Block-ID 1..9");
         return;
     }
+
+#if !MEGA2_SIM_MODE
+    if (cmd == 'o' || cmd == 'O' || cmd == 'i' || cmd == 'I')
+    {
+        DBG_PRINTLN("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)");
+        return;
+    }
+#endif
 
     switch (cmd)
     {
@@ -291,9 +311,6 @@ void setup()
 
     safetyBegin();
 
-
-    g_trafoOben.begin();
-    g_trafoUnten.begin();
     k_block1.begin(); k_block2.begin(); k_block3.begin();
     k_block4.begin(); k_block5.begin(); k_block6.begin();
     k_sbhf1.begin();  k_sbhf2.begin();  k_sbhf3.begin();
@@ -303,6 +320,9 @@ void setup()
     strom1.begin(); strom2.begin(); strom3.begin();
     strom4.begin(); strom5.begin(); strom6.begin();
     stromSbhf1.begin(); stromSbhf2.begin(); stromSbhf3.begin();
+
+    g_trafoOben.begin();
+    g_trafoUnten.begin();
 
     initBlocks();
 
@@ -324,16 +344,15 @@ void loop()
 {
     uint32_t now = millis();
 
+    g_trafoOben.update(now);
+    g_trafoUnten.update(now);
+
 #if MEGA2_DEBUG
     dbgHandleSerial();
 #endif
 
-    
-    // Trafo-Spannung aktualisieren (für Safety-Checks)
-    g_trafoOben.update(now);
-    g_trafoUnten.update(now);
-
     safetyUpdate();
+
     if (now - lastBlockUpdate >= BLOCK_UPDATE_MS)
     {
         lastBlockUpdate = now;
@@ -364,14 +383,20 @@ void loop()
         buildMega2SystemStatus(g_systemStatus);
 
     #if MEGA2_DEBUG
-        static uint8_t dbgDiv = 0;
-        if (++dbgDiv >= 10)
-        {
-            dbgDiv = 0;
-            Serial.print(F("SYS flags="));
-            Serial.println(g_systemStatus.flags, BIN);
-        }
-    #endif
+    static uint16_t lastFlags = 0xFFFF;
+    const uint16_t f = g_systemStatus.flags;
+
+    if (f != lastFlags)
+    {
+        Serial.print(F("SYS flags=0x"));
+        if (f < 0x1000) Serial.print('0');
+        if (f < 0x0100) Serial.print('0');
+        if (f < 0x0010) Serial.print('0');
+        Serial.println(f, HEX);
+
+        lastFlags = f;
+    }
+#endif
 
         megaI2C_update();
     }
