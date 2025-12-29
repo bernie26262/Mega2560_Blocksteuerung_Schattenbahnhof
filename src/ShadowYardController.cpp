@@ -162,8 +162,9 @@ void ShadowYardController::onS15()
         return;
     }
 
-    // NOT-AUS EIN
-    g_power.setNothalt(true);
+    // S15: Nothaltgleis EIN (Freigabe)
+    g_power.setNothalt(false);
+    DBG_PRINTLN("[SBHF] S15 -> Nothalt frei (Gleis EIN)");
 }
 
 void ShadowYardController::onS16()
@@ -174,9 +175,11 @@ void ShadowYardController::onS16()
         return;
     }
 
-    // NOT-AUS AUS -> Hard-Error
-    g_power.setNothalt(false);
-    triggerHardError();
+    // S16: Nothaltgleis AUS (Stopzone scharf)
+    g_power.setNothalt(true);
+    DBG_PRINTLN("[SBHF] S16 -> Nothalt aktiv (Gleis AUS)");
+
+    // KEIN Hard-Error hier!
 }
 
 // ============================================================
@@ -426,7 +429,23 @@ void ShadowYardController::onResetAck()
 {
     if (!canReset())
     {
-        DBG_PRINTLN("[SBHF] RESET ignored (conditions not met)");
+        // Aussagekräftiger statt "conditions not met"
+        if (m_state != SBhfState::Error)
+        {
+            DBG_PRINTLN("[SBHF] RESET ignored (not in Error)");
+        }
+        else if (g_power.isNothaltActive())
+        {
+            DBG_PRINTLN("[SBHF] RESET ignored (Nothalt still active)");
+        }
+        else if (m_exitPowerOn)
+        {
+            DBG_PRINTLN("[SBHF] RESET ignored (exit power still on)");
+        }
+        else
+        {
+            DBG_PRINTLN("[SBHF] RESET ignored (conditions not met)");
+        }
         return;
     }
 

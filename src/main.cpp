@@ -69,6 +69,12 @@ SensorStrom stromSbhf1(PIN_ADC_SBH_GL1);
 SensorStrom stromSbhf2(PIN_ADC_SBH_GL2);
 SensorStrom stromSbhf3(PIN_ADC_SBH_GL3);
 
+
+// --------------------- TRAFO-SPANNUNG (ZMPT101B) ----------------------------
+// Hinweis: Pin-Makros müssen in mega2_pins.h definiert sein.
+SensorTrafoAC g_trafoOben(PIN_ADC_TRAFO_OBEN);
+SensorTrafoAC g_trafoUnten(PIN_ADC_TRAFO_UNTEN);
+
 // --------------------- BLOCK-OBJEKTE ----------------------------------------
 void initBlocks()
 {
@@ -117,37 +123,6 @@ Mega2Payload g_payload;
 // --------------------- SYSTEM STATUS (ESP read-only) -------------------------
 SystemStatus g_systemStatus;
 
-
-// ============================================================================
-// SBHF SENSOR DISPATCH (S11..S16)
-// - flankenbasiert via PulseSensor::fellEdge()
-// - zentraler Ort, um Safety-Gates ohne Seiteneffekte zu erzwingen
-// ============================================================================
-static void pollSbhfSensors()
-{
-    // Immer erst Flanken einlesen, damit keine "alten" Events nach einem Unblock nachlaufen.
-    const bool e11 = g_s11.fellEdge();
-    const bool e12 = g_s12.fellEdge();
-    const bool e13 = g_s13.fellEdge();
-    const bool e14 = g_s14.fellEdge();
-    const bool e15 = g_s15.fellEdge();
-    const bool e16 = g_s16.fellEdge();
-
-    // Safety-Gate: wenn SBhf gesperrt ist, werden ALLE S11..S16 Events ignoriert.
-    // (Damit gilt die Safety-Logik explizit auch für S12..S16.)
-    if (g_sbhf.isSafetyBlocked())
-        return;
-
-    // Dispatch
-    if (e15) g_sbhf.onS15();
-    if (e16) g_sbhf.onS16();
-    if (e11) g_sbhf.onS11();
-    if (e12) g_sbhf.onS12();
-    if (e13) g_sbhf.onS13();
-    if (e14) g_sbhf.onS14();
-}
-
-
 // ============================================================================
 // TIMER
 // ============================================================================
@@ -188,6 +163,24 @@ if (line[1] == '\0')
     if (c=='r') g_sbhf.onResetAck();
     if (c=='d') mega2DebugDump();
 
+    // Trafo-Spannung Debug (ZMPT101B)
+    if (c=='t')
+    {
+        g_trafoOben.printDebug("Trafo oben");
+        g_trafoUnten.printDebug("Trafo unten");
+        DBG_PRINTLN(safetyDebugIsTrafoUntenForced()
+            ? "[DBG] Trafo unten FORCED=ON"
+            : "[DBG] Trafo unten FORCED=OFF");
+    }
+
+    // Debug-Override: Trafo unten "powered" erzwingen (ohne Hardware)
+    if (c=='T')
+    {
+        const bool on = !safetyDebugIsTrafoUntenForced();
+        safetyDebugForceTrafoUntenPowered(on);
+        DBG_PRINTLN(on ? "[DBG] Trafo unten FORCE ON" : "[DBG] Trafo unten FORCE OFF");
+    }
+
     // -----------------------------
     // SAFETY DEBUG (M2.1)
     // -----------------------------
@@ -205,8 +198,11 @@ if (line[1] == '\0')
 
     if (c == 'a')
     {
-        safetyResetEmergency();
-        DBG_PRINTLN("[DBG] ACK");
+        const bool ok = safetyResetEmergency();
+        DBG_PRINTLN(ok ? "[DBG] ACK OK" : "[DBG] ACK BLOCKED");
+
+        // Optional: SBHF-Reset (nur wirksam, wenn SBHF wirklich im Error ist)
+        g_sbhf.onResetAck();
     }
 
     return;
@@ -248,10 +244,12 @@ static void dbgHandleSerial()
 
         // ---------------------------------
         // SOFORTREAKTION für Single Keys
+        //   nur wenn noch KEINE Zeilen-Eingabe läuft
         // ---------------------------------
-        if (ch == 'p' || ch == 'n' || ch == 'a' ||
-            (ch >= '1' && ch <= '6') ||
-            ch == 'r' || ch == 'd')
+        if (s_dbgLen == 0 &&
+            (ch == 'p' || ch == 'n' || ch == 'a' || ch == 't' || ch == 'T' ||
+             (ch >= '1' && ch <= '6') ||
+             ch == 'r' || ch == 'd'))
         {
             char tmp[2] = { ch, 0 };
             dbgProcessLine(tmp);
@@ -293,6 +291,9 @@ void setup()
 
     safetyBegin();
 
+
+    g_trafoOben.begin();
+    g_trafoUnten.begin();
     k_block1.begin(); k_block2.begin(); k_block3.begin();
     k_block4.begin(); k_block5.begin(); k_block6.begin();
     k_sbhf1.begin();  k_sbhf2.begin();  k_sbhf3.begin();
@@ -327,11 +328,12 @@ void loop()
     dbgHandleSerial();
 #endif
 
+    
+    // Trafo-Spannung aktualisieren (für Safety-Checks)
+    g_trafoOben.update(now);
+    g_trafoUnten.update(now);
+
     safetyUpdate();
-
-    // Hardware-Events (S11..S16) -> SBhf-State-Machine
-    pollSbhfSensors();
-
     if (now - lastBlockUpdate >= BLOCK_UPDATE_MS)
     {
         lastBlockUpdate = now;

@@ -37,8 +37,12 @@ public:
     void onS12();
     void onS13();
     void onS14();
-    void onS15();   // NOT-AUS EIN
-    void onS16();   // NOT-AUS AUS / Hard-Error
+    // Block 6 / Nothaltgleis-Logik:
+    // S15: Nothaltgleis EIN (Freigabe), Zug darf passieren
+    // S16: Nothaltgleis AUS (Nothalt aktiv), Stopzone wieder scharf
+    // Hard-Error wird NICHT an S16 gekoppelt, sondern an Safety-Bedingung (EMERG_NOTHALT_SBHF).
+    void onS15();   // NOT-AUS aus
+    void onS16();   // NOT-AUS ein / Hard-Error
 
     // D3: Reset / Acknowledge
     void onResetAck();

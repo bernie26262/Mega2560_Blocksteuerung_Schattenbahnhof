@@ -32,3 +32,6 @@ bool safetyIsPowerOn();
 bool safetyIsLocked();
 
 uint8_t safetyGetBlockReason();
+
+void safetyDebugForceTrafoUntenPowered(bool on);
+bool safetyDebugIsTrafoUntenForced();
