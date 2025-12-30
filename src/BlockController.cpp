@@ -186,7 +186,6 @@ void BlockController::debugClear(uint8_t id)
 // Aktuell noch NICHT aktiv verdrahtet
 void BlockController::onShortCircuit(uint8_t block)
 {
-    // Noch nicht aktiv verwendet!
-    safetyErrorSet(SAFETY_ERR_BLOCK_SHORT, block);
-    safetySetEmergency(true);
+    // Kurzschluss am Block: Safety-Lock + SSRs AUS
+    safetyTriggerBlockShort(block);
 }

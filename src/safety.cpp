@@ -26,6 +26,11 @@ static bool s_emergencyActive = false;
 
 // interner Merker für SSR-Zustand
 static bool s_ssrState[2] = { false, false };
+// SSR-Stuck-Detektion: SSR ist AUS, aber Trafo-Spannung bleibt anliegen
+static uint32_t s_ssrStuckCondSinceMs[2] = { 0, 0 };
+
+static constexpr uint32_t SSR_STUCK_DETECT_MS = 500;
+
 
 
 static SafetyBlockReason s_blockReason = SAFETY_BLOCK_BOOT;
@@ -39,6 +44,12 @@ static uint32_t s_nothaltCondSinceMs      = 0;
 // Debug (SIM): Trafo unten "powered" erzwingen
 static bool s_dbgTrafoUntenForced = false;
 
+static bool isTrafoObenPowered()
+{
+    return g_trafoOben.isPowered();
+}
+
+
 static bool isTrafoUntenPowered()
 {
 #if MEGA2_SIM_MODE
@@ -46,6 +57,58 @@ static bool isTrafoUntenPowered()
         return true;
 #endif
     return g_trafoUnten.isPowered();
+}
+
+
+static void checkSsrStuck(uint32_t now)
+{
+    // Wenn ein anderer Fehler aktiv ist (z.B. Block-Short), lassen wir ihn latches.
+    if (safetyErrorActive() && safetyErrorGet().type != SAFETY_ERR_SSR_STUCK)
+        return;
+
+    // Für beide SSRs prüfen: SSR AUS, aber Spannung bleibt anliegen
+    for (uint8_t idx = 0; idx < 2; idx++)
+    {
+        
+        // SSR EIN => keine Stuck-Prüfung
+        if (s_ssrState[idx])
+        {
+            s_ssrStuckCondSinceMs[idx] = 0;
+            continue;
+        }
+
+        const bool powered = (idx == 0) ? isTrafoObenPowered() : isTrafoUntenPowered();
+        if (!powered)
+        {
+            s_ssrStuckCondSinceMs[idx] = 0;
+            continue;
+        }
+
+        if (s_ssrStuckCondSinceMs[idx] == 0)
+            s_ssrStuckCondSinceMs[idx] = now;
+
+        if ((now - s_ssrStuckCondSinceMs[idx]) >= SSR_STUCK_DETECT_MS)
+        {
+            // Safety-Lock setzen
+            s_blockReason = SAFETY_BLOCK_EMERGENCY;
+
+            // Beide SSRs hart AUS (failsafe)
+            safetySetSSR(SafetySSR::SSR_TRAFO_A, false);
+            safetySetSSR(SafetySSR::SSR_TRAFO_B, false);
+
+            s_ssrStuckCondSinceMs[0] = 0;
+            s_ssrStuckCondSinceMs[1] = 0;
+
+            safetyErrorSet(SAFETY_ERR_SSR_STUCK, idx);
+
+            #if MEGA2_DEBUG
+                Serial.print(F("[SAFETY] EMERG_SSR_STUCK("));
+                Serial.print(idx == 0 ? F("A") : F("B"));
+                Serial.println(F(") -> SSR_A/B OFF, LOCK"));
+            #endif
+            return;
+        }
+    }
 }
 
 
@@ -61,6 +124,9 @@ void safetyBegin()
     // Sicherer Start: beide Trafos AUS
     safetySetSSR(SafetySSR::SSR_TRAFO_A, false);
     safetySetSSR(SafetySSR::SSR_TRAFO_B, false);
+
+    s_ssrStuckCondSinceMs[0] = 0;
+    s_ssrStuckCondSinceMs[1] = 0;
 
     s_emergencyActive = false;
 
@@ -115,6 +181,9 @@ void safetyUpdate()
             // Unteren Trafo abschalten (SSR_B)
             safetySetSSR(SafetySSR::SSR_TRAFO_B, false);
 
+    s_ssrStuckCondSinceMs[0] = 0;
+    s_ssrStuckCondSinceMs[1] = 0;
+
             // Error-Info setzen (nutzen vorhandenen Code NOTAUS, Context=6)
             safetyErrorSet(SAFETY_ERR_NOTAUS, 6);
 
@@ -127,6 +196,8 @@ void safetyUpdate()
     {
         s_nothaltCondSinceMs = 0;
     }
+
+    checkSsrStuck(now);
 }
 
 // --------------------------------------------------
@@ -192,12 +263,35 @@ void safetySetEmergency(bool active)
         safetySetSSR(SafetySSR::SSR_TRAFO_A, false);
         safetySetSSR(SafetySSR::SSR_TRAFO_B, false);
 
+    s_ssrStuckCondSinceMs[0] = 0;
+    s_ssrStuckCondSinceMs[1] = 0;
+
         safetyErrorSet(SAFETY_ERR_NOTAUS, 0);
         return;
     }
 
     s_emergencyActive = false;
 }
+
+void safetyTriggerBlockShort(uint8_t block)
+{
+    // Kurzschluss: Alles AUS + Safety-Lock
+    safetySetSSR(SafetySSR::SSR_TRAFO_A, false);
+    safetySetSSR(SafetySSR::SSR_TRAFO_B, false);
+
+    s_ssrStuckCondSinceMs[0] = 0;
+    s_ssrStuckCondSinceMs[1] = 0;
+
+    s_blockReason = SAFETY_BLOCK_EMERGENCY;
+    safetyErrorSet(SAFETY_ERR_BLOCK_SHORT, block);
+
+#if MEGA2_DEBUG
+    Serial.print(F("[SAFETY] EMERG_BLOCK_SHORT(B"));
+    Serial.print(block);
+    Serial.println(F(") -> SSR_A/B OFF, LOCK"));
+#endif
+}
+
 
 // --------------------------------------------------
 // Quittierung / Reset
@@ -227,10 +321,52 @@ bool safetyResetEmergency()
         s_nothaltCondSinceMs      = 0;
     }
 
+    // --------------------------------------------------
+    // Block-Short: ACK erst wenn kein Strom mehr anliegt
+    // --------------------------------------------------
+    if (safetyErrorActive())
+    {
+        const auto e = safetyErrorGet();
+        if (e.type == SAFETY_ERR_BLOCK_SHORT)
+        {
+            const uint8_t b = e.index;
+            if (g_bc.stromFiltered(b) > 0)
+            {
+#if MEGA2_DEBUG
+                Serial.print(F("[SAFETY] ACK blocked (BLOCK_SHORT): Block"));
+                Serial.print(b);
+                Serial.println(F(" still has current"));
+#endif
+                return false;
+            }
+        }
+        else if (e.type == SAFETY_ERR_SSR_STUCK)
+        {
+            const bool obenOk  = !isTrafoObenPowered();
+            const bool untenOk = !isTrafoUntenPowered();
+
+            if (!obenOk || !untenOk)
+            {
+#if MEGA2_DEBUG
+                Serial.print(F("[SAFETY] ACK blocked (SSR_STUCK): "));
+                if (!obenOk)  Serial.print(F("Trafo oben still powered "));
+                if (!untenOk) Serial.print(F("Trafo unten still powered "));
+                Serial.println();
+#endif
+                return false;
+            }
+        }
+
+    }
+
+
     s_emergencyActive = false;
     s_blockReason     = SAFETY_BLOCK_NONE;
 
     safetyErrorClear();
+
+    s_ssrStuckCondSinceMs[0] = 0;
+    s_ssrStuckCondSinceMs[1] = 0;
     return true;
 }
 

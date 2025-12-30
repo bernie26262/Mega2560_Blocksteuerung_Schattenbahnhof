@@ -231,7 +231,7 @@ if (line[1] == '\0')
     }
 
 #if !MEGA2_SIM_MODE
-    if (cmd == 'o' || cmd == 'O' || cmd == 'i' || cmd == 'I')
+    if (cmd == 'o' || cmd == 'O' || cmd == 'i' || cmd == 'I' || cmd == 'k')
     {
         DBG_PRINTLN("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)");
         return;
@@ -244,6 +244,7 @@ if (line[1] == '\0')
         case 'O': g_bc.debugSetOccupied(n, false); break;
         case 'i': g_bc.debugSetStrom(n, true);     break;
         case 'I': g_bc.debugSetStrom(n, false);    break;
+        case 'k': g_bc.onShortCircuit(n);           break;
         case 'x':
         case 'X': g_bc.debugClear(n);              break;
     }
@@ -267,7 +268,7 @@ static void dbgHandleSerial()
         //   nur wenn noch KEINE Zeilen-Eingabe läuft
         // ---------------------------------
         if (s_dbgLen == 0 &&
-            (ch == 'p' || ch == 'n' || ch == 'a' || ch == 't' || ch == 'T' ||
+            (ch == 'p' || ch == 'n' || ch == 'a' || ch == 't' || ch == 'T' || ch == 'x' || ch == 'X' || ch == 'y' || ch == 'Y' ||
              (ch >= '1' && ch <= '6') ||
              ch == 'r' || ch == 'd'))
         {
