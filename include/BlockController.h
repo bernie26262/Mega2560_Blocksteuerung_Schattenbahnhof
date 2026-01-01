@@ -15,37 +15,35 @@ public:
 
     // Status
     bool     isOccupied(uint8_t id) const;
-    uint16_t stromFiltered(uint8_t id) const;
-    bool     stromOverThreshold(uint8_t id) const;
+    uint16_t stromFiltered(uint8_t id) const;      // mA (SIM) / heuristisch (HW)
+    bool     stromOverThreshold(uint8_t id) const; // optional
 
-    // Blockfreigabe
+    // Einfahrt in Block erlaubt? (hilft dem SBHF)
     bool canEnter(uint8_t fromBlock, uint8_t toBlock) const;
 
 #if MEGA2_DEBUG
-    // Debug-Override (nur Block 1..9)
     void debugSetOccupied(uint8_t id, bool occ);
-    void debugSetStrom(uint8_t id, bool active);
+    void debugSetStrom(uint8_t id, bool active);      // 300 mA
+    void debugSetStromShort(uint8_t id, bool active); // 2500 mA
     void debugClear(uint8_t id);
 #endif
 
-// Wird später vom Kurzschluss-Detektor aufgerufen
-void onShortCircuit(uint8_t block);
+    // optional: direkte Meldung "Kurzschluss erkannt"
+    void onShortCircuit(uint8_t block);
 
 private:
-    Block**  m_blocks;
-    uint8_t  m_count;
+    Block**  m_blocks = nullptr;
+    uint8_t  m_count  = 0;
 
-    // normale Stromlogik (bestehend)
-    uint16_t* m_stromFiltered;
-    bool*     m_stromActive;
+    // Cache aus update()
+    uint16_t m_stromFiltered[16] = {0};
+    bool     m_stromActive[16]   = {false};
 
 #if MEGA2_DEBUG
-    // Debug-Zustand
-    bool     m_dbgActive[16];
-    bool     m_dbgOcc[16];
-    bool     m_dbgStrom[16];
-    uint32_t m_dbgLastFreeMs[16];
+    bool     m_dbgActive[16]     = {false};
+    bool     m_dbgOcc[16]        = {false};
+    bool     m_dbgStrom[16]      = {false};
+    bool     m_dbgStromShort[16] = {false};
+    uint32_t m_dbgLastFreeMs[16] = {0};
 #endif
 };
-
-void onShortCircuit(uint8_t block);

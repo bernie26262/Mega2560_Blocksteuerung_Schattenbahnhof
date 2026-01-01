@@ -1,191 +1,212 @@
 #include "BlockController.h"
+
 #include "Block.h"
 #include "mega2_debug.h"
-#include "safety_error.h"
-#include "safety.h"
+#include "safety.h"  // safetyTriggerBlockShort()
 
-#if MEGA2_DEBUG
-static constexpr uint8_t  DBG_MIN_ID = 1;
-static constexpr uint8_t  DBG_MAX_ID = 9;
-static constexpr uint32_t DBG_STABLE_FREE_MS = 500;
+// ------------------------------------------------------------
+// SIM-Currentwerte (nur Debug/Sim)
+// ------------------------------------------------------------
+static constexpr uint16_t DBG_SIM_CURRENT_NOMINAL_MA = 300;
+static constexpr uint16_t DBG_SIM_CURRENT_SHORT_MA   = 2500;
 
-static inline bool dbgIdOk(uint8_t id)
+static inline bool idOk(uint8_t id, uint8_t count)
 {
-    return (id >= DBG_MIN_ID && id <= DBG_MAX_ID);
+    return (id >= 1) && (id <= count);
 }
-#endif
 
-// ------------------------------------------------------------
-// ctor
-// ------------------------------------------------------------
 BlockController::BlockController(Block** blocks, uint8_t count)
-: m_blocks(blocks),
-  m_count(count)
+: m_blocks(blocks)
+, m_count(count)
 {
-    m_stromFiltered = new uint16_t[count]();
-    m_stromActive   = new bool[count]();
-
-#if MEGA2_DEBUG
-    for (uint8_t i = 0; i < 16; i++)
-    {
-        m_dbgActive[i]     = false;
-        m_dbgOcc[i]        = false;
-        m_dbgStrom[i]      = false;
-        m_dbgLastFreeMs[i] = 0;
-    }
-#endif
 }
 
-// ------------------------------------------------------------
-// update
-// ------------------------------------------------------------
 void BlockController::update(uint32_t nowMs)
 {
-    for (uint8_t i = 0; i < m_count; i++)
-        if (m_blocks[i])
-            m_blocks[i]->update(nowMs);
-}
-
-// ------------------------------------------------------------
-// isOccupied
-// ------------------------------------------------------------
-bool BlockController::isOccupied(uint8_t id) const
-{
-#if MEGA2_DEBUG
-    if (dbgIdOk(id) && m_dbgActive[id])
-        return (m_dbgOcc[id] || m_dbgStrom[id]);
-#endif
-
-    if (!m_blocks || id >= m_count || !m_blocks[id])
-        return false;
-
-    return m_blocks[id]->besetzt();
-}
-
-// ------------------------------------------------------------
-// canEnter
-// ------------------------------------------------------------
-bool BlockController::canEnter(uint8_t from, uint8_t to) const
-{
-    if (!m_blocks || from >= m_count || to >= m_count)
-        return false;
-
-    Block* fromBlock = m_blocks[from];
-    Block* toBlock   = m_blocks[to];
-    if (!fromBlock || !toBlock)
-        return false;
-
-    uint32_t now = millis();
-
-#if MEGA2_DEBUG
-    if (dbgIdOk(to) && m_dbgActive[to])
+    // Wichtig: IDs sind 1-basiert (g_blocks[0] = nullptr)
+    for (uint8_t id = 1; id <= m_count; ++id)
     {
-        if (m_dbgOcc[to] || m_dbgStrom[to])
-            return false;
-
-        if ((now - m_dbgLastFreeMs[to]) < DBG_STABLE_FREE_MS)
-            return false;
-    }
-    else
-#endif
-    {
-        if (!toBlock->isReallyFree(now))
-            return false;
-    }
-
-    // ---------------- BLOCK 4 Sonderregeln ----------------
-    if (to == 4)
-    {
-        uint8_t occ123 = 0;
-        for (uint8_t i = 1; i <= 3; i++)
-            if (m_blocks[i] && isOccupied(i))
-                occ123++;
-
-        if (from == 6)
-            return (occ123 <= 2);
-
-        if (from == 3)
-        {
-            if (!isOccupied(6))
-                return true;
-            return (occ123 > 2);
+        Block* b = m_blocks ? m_blocks[id] : nullptr;
+        if (!b) {
+            m_stromFiltered[id] = 0;
+            m_stromActive[id]   = false;
+            continue;
         }
 
-        return false;
+        b->update(nowMs);
+
+        // In HW haben wir hier derzeit nur eine bool-Aussage (stromAktiv).
+        // Für Anzeige/Diagnose mapen wir das heuristisch auf ~300mA.
+        const bool active = b->stromAktiv();
+        m_stromActive[id]   = active;
+        m_stromFiltered[id] = active ? DBG_SIM_CURRENT_NOMINAL_MA : 0;
+
+#if MEGA2_DEBUG
+        // Debug-Helper: wenn Debug-OCC aktiv ist, merken wir uns den "frei" Zeitpunkt
+        if (m_dbgActive[id])
+        {
+            const bool dbgOcc = (m_dbgOcc[id] || m_dbgStrom[id]);
+            if (!dbgOcc && m_dbgLastFreeMs[id] == 0)
+                m_dbgLastFreeMs[id] = nowMs;
+            if (dbgOcc)
+                m_dbgLastFreeMs[id] = 0;
+        }
+#endif
     }
-
-    // ---------------- Standardpfade ----------------
-    if (from == 1 && to == 2) return true;
-    if (from == 2 && to == 3) return true;
-    if (from == 4 && to == 5) return true;
-    if (from == 5 && (to == 7 || to == 8 || to == 9)) return true;
-    if ((from == 7 || from == 8 || from == 9) && to == 6) return true;
-
-    return false;
 }
 
-// ------------------------------------------------------------
-// stromFiltered
-// ------------------------------------------------------------
 uint16_t BlockController::stromFiltered(uint8_t id) const
 {
-#if MEGA2_DEBUG
-    if (dbgIdOk(id) && m_dbgActive[id])
-        return m_dbgStrom[id] ? 1 : 0;
-#endif
-
-    if (!m_blocks || id >= m_count || !m_blocks[id])
+    if (!idOk(id, m_count))
         return 0;
 
-    return m_blocks[id]->stromAktiv() ? 1 : 0;
+#if MEGA2_DEBUG
+    if (m_dbgActive[id])
+    {
+        if (!m_dbgStrom[id])
+            return 0;
+        return m_dbgStromShort[id] ? DBG_SIM_CURRENT_SHORT_MA
+                                   : DBG_SIM_CURRENT_NOMINAL_MA;
+    }
+#endif
+
+    return m_stromFiltered[id];
 }
 
-bool BlockController::stromOverThreshold(uint8_t) const
+bool BlockController::stromOverThreshold(uint8_t id) const
 {
+    if (id == 0 || id > m_count) return false;
+
+#if MEGA2_SIM_MODE
+    // SIM: "Kurzschluss" heißt: debug short flag gesetzt (k6)
+    if (m_dbgStromShort[id]) return true;
+
+    // optional: normaler Strom (i6) soll NICHT als Kurzschluss gelten
     return false;
+#else
+    // Real: wir haben nur stromAktiv() (kein mA), daher konservativ:
+    Block* b = m_blocks[id];
+    return b ? b->stromAktiv() : false;
+#endif
+}
+
+bool BlockController::isOccupied(uint8_t id) const
+{
+    if (!idOk(id, m_count))
+        return false;
+
+#if MEGA2_DEBUG
+    if (m_dbgActive[id])
+        return m_dbgOcc[id] || m_dbgStrom[id];
+#endif
+
+    Block* b = m_blocks ? m_blocks[id] : nullptr;
+    return b ? b->besetzt() : false;
+}
+
+bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
+{
+    (void)fromBlock;
+
+    // 500ms stabil "frei" (wichtig gegen Prellen/Jitter)
+    static constexpr uint32_t STABLE_FREE_MS = 500;
+
+    if (!idOk(toBlock, m_count))
+        return false;
+
+#if MEGA2_DEBUG
+    // Debug: wenn wir den Block künstlich steuern, nehmen wir unseren "frei"-Timestamp
+    if (m_dbgActive[toBlock])
+    {
+        if (isOccupied(toBlock))
+            return false;
+
+        uint32_t t = m_dbgLastFreeMs[toBlock];
+        if (t == 0)
+            return true; // gerade erst frei geworden oder nie gesetzt -> erlauben
+
+        return (millis() - t) >= STABLE_FREE_MS;
+    }
+#endif
+
+    return !isOccupied(toBlock);
 }
 
 #if MEGA2_DEBUG
-// ------------------------------------------------------------
-// DEBUG API
-// ------------------------------------------------------------
+static inline bool dbgIdOk(uint8_t id)
+{
+    // wir lassen hier 1..16 zu
+    return (id >= 1) && (id <= 16);
+}
+
 void BlockController::debugSetOccupied(uint8_t id, bool occ)
 {
-    if (!dbgIdOk(id)) return;
+    if (!dbgIdOk(id))
+        return;
 
     m_dbgActive[id] = true;
     m_dbgOcc[id]    = occ;
 
-    if (!m_dbgOcc[id] && !m_dbgStrom[id])
+    if (!occ && !m_dbgStrom[id])
         m_dbgLastFreeMs[id] = millis();
+    if (occ)
+        m_dbgLastFreeMs[id] = 0;
 }
 
 void BlockController::debugSetStrom(uint8_t id, bool active)
 {
-    if (!dbgIdOk(id)) return;
+    if (!dbgIdOk(id))
+        return;
+
+    m_dbgActive[id]     = true;
+    m_dbgStrom[id]      = active;
+    m_dbgStromShort[id] = false;
+
+    if (!active && !m_dbgOcc[id])
+        m_dbgLastFreeMs[id] = millis();
+    if (active)
+        m_dbgLastFreeMs[id] = 0;
+}
+
+void BlockController::debugSetStromShort(uint8_t id, bool active)
+{
+    if (!dbgIdOk(id))
+        return;
 
     m_dbgActive[id] = true;
-    m_dbgStrom[id]  = active;
 
-    if (!m_dbgOcc[id] && !m_dbgStrom[id])
-        m_dbgLastFreeMs[id] = millis();
+    if (active)
+    {
+        m_dbgStrom[id]      = true;
+        m_dbgStromShort[id] = true;
+        m_dbgLastFreeMs[id] = 0;
+    }
+    else
+    {
+        // komplett aus
+        m_dbgStrom[id]      = false;
+        m_dbgStromShort[id] = false;
+
+        if (!m_dbgOcc[id])
+            m_dbgLastFreeMs[id] = millis();
+    }
 }
 
 void BlockController::debugClear(uint8_t id)
 {
-    if (!dbgIdOk(id)) return;
+    if (!dbgIdOk(id))
+        return;
 
-    m_dbgActive[id]     = false;
-    m_dbgOcc[id]        = false;
-    m_dbgStrom[id]      = false;
-    m_dbgLastFreeMs[id] = millis();
+    m_dbgActive[id]      = false;
+    m_dbgOcc[id]         = false;
+    m_dbgStrom[id]       = false;
+    m_dbgStromShort[id]  = false;
+    m_dbgLastFreeMs[id]  = 0;
 }
 #endif
 
-// Wird später vom Stromsensor / Kurzschluss-Detektor aufgerufen
-// Aktuell noch NICHT aktiv verdrahtet
 void BlockController::onShortCircuit(uint8_t block)
 {
-    // Kurzschluss am Block: Safety-Lock + SSRs AUS
+    DBG_PRINTF("[BC] ShortCircuit on block %u\n", block);
     safetyTriggerBlockShort(block);
 }

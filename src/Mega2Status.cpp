@@ -10,7 +10,11 @@
 // globale Controller
 extern BlockController      g_bc;
 extern ShadowYardController g_sbhf;
-extern uint16_t             g_bootId;
+
+// g_bootId: weak definition, damit der Linker auch dann zufrieden ist,
+// wenn (noch) keine andere starke Definition existiert.
+// Falls du irgendwann woanders eine starke Definition anlegst, gewinnt diese automatisch.
+__attribute__((weak)) uint16_t g_bootId = 0;
 
 // --------------------------------------------------
 // SAFETY

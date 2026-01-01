@@ -1,11 +1,13 @@
 #include <Arduino.h>
-
-#ifndef MEGA2_SIM_MODE
-#define MEGA2_SIM_MODE 0
-#endif
 #include <Wire.h>
 
 #include "mega2_pins.h"
+
+// Nothalt-Kontaktgleis (Stopzone-Kontakt) – muss in Block 6 Belegung einfließen
+#ifndef PIN_KONTAKT_NOTHALT
+#define PIN_KONTAKT_NOTHALT 19
+#endif
+
 
 #include "Block.h"
 #include "BlockController.h"
@@ -44,6 +46,10 @@ BlockController& blockController = g_bc;
 // --------------------- POWER CONTROL ----------------------------------------
 Mega2PowerControl g_power;
 
+// --------------------- TRAFO-SPANNUNG (ZMPT101B) ----------------------------
+SensorTrafoAC g_trafoOben(PIN_ADC_TRAFO_OBEN);
+SensorTrafoAC g_trafoUnten(PIN_ADC_TRAFO_UNTEN);
+
 // --------------------- KONTAKTGLEISE ----------------------------------------
 SensorKontakt k_block1(PIN_KONTAKT_BLOCK1);
 SensorKontakt k_block2(PIN_KONTAKT_BLOCK2);
@@ -51,6 +57,7 @@ SensorKontakt k_block3(PIN_KONTAKT_BLOCK3);
 SensorKontakt k_block4(PIN_KONTAKT_BLOCK4);
 SensorKontakt k_block5(PIN_KONTAKT_BLOCK5);
 SensorKontakt k_block6(PIN_KONTAKT_BLOCK6);
+SensorKontakt k_nothalt(PIN_KONTAKT_NOTHALT);
 
 SensorKontakt k_sbhf1(PIN_KONTAKT_SBH_GF1);
 SensorKontakt k_sbhf2(PIN_KONTAKT_SBH_GF2);
@@ -73,10 +80,6 @@ SensorStrom stromSbhf1(PIN_ADC_SBH_GL1);
 SensorStrom stromSbhf2(PIN_ADC_SBH_GL2);
 SensorStrom stromSbhf3(PIN_ADC_SBH_GL3);
 
-// --------------------- TRAFO-SPANNUNG (ZMPT101B) ----------------------------
-SensorTrafoAC g_trafoOben(PIN_ADC_TRAFO_OBEN);
-SensorTrafoAC g_trafoUnten(PIN_ADC_TRAFO_UNTEN);
-
 // --------------------- BLOCK-OBJEKTE ----------------------------------------
 void initBlocks()
 {
@@ -87,7 +90,7 @@ void initBlocks()
     g_blocks[3] = new Block(3, &k_block3, &strom3);
     g_blocks[4] = new Block(4, &k_block4, &strom4, &k_bhf4a, &k_bhf4b);
     g_blocks[5] = new Block(5, &k_block5, &strom5);
-    g_blocks[6] = new Block(6, &k_block6, &strom6);
+    g_blocks[6] = new Block(6, &k_block6, &strom6, &k_nothalt);
 
     g_blocks[7] = new Block(7, &k_sbhf1, &stromSbhf1);
     g_blocks[8] = new Block(8, &k_sbhf2, &stromSbhf2);
@@ -156,44 +159,14 @@ if (line[1] == '\0')
     char c = line[0];
 
     // Shadow yard debug
-#if MEGA2_SIM_MODE
     if (c=='1') g_sbhf.onS11();
     if (c=='2') g_sbhf.onS12();
     if (c=='3') g_sbhf.onS13();
     if (c=='4') g_sbhf.onS14();
     if (c=='5') g_sbhf.onS15();
     if (c=='6') g_sbhf.onS16();
-#else
-    if (c>='1' && c<='6')
-    {
-        DBG_PRINTLN("[DBG] SIM sensor keys disabled (MEGA2_SIM_MODE=0)");
-    }
-#endif
     if (c=='r') g_sbhf.onResetAck();
     if (c=='d') mega2DebugDump();
-
-    // Trafo-Diagnose
-    if (c=='t')
-    {
-        g_trafoOben.printDebug("Trafo oben");
-        g_trafoUnten.printDebug("Trafo unten");
-        DBG_PRINTLN(safetyDebugIsTrafoUntenForced() ? "[DBG] Trafo unten FORCED=ON" : "[DBG] Trafo unten FORCED=OFF");
-    }
-
-#if MEGA2_SIM_MODE
-    if (c=='T')
-    {
-        static bool on = false;
-        on = !on;
-        safetyDebugForceTrafoUntenPowered(on);
-        DBG_PRINTLN(on ? "[DBG] Trafo unten FORCE ON" : "[DBG] Trafo unten FORCE OFF");
-    }
-#else
-    if (c=='T')
-    {
-        DBG_PRINTLN("[DBG] Trafo-FORCE disabled (MEGA2_SIM_MODE=0)");
-    }
-#endif
 
     // -----------------------------
     // SAFETY DEBUG (M2.1)
@@ -212,9 +185,20 @@ if (line[1] == '\0')
 
     if (c == 'a')
     {
-        const bool ok = safetyResetEmergency();
+        bool ok = safetyResetEmergency();
         DBG_PRINTLN(ok ? "[DBG] ACK OK" : "[DBG] ACK BLOCKED");
-        g_sbhf.onResetAck();
+    }
+
+    if (c == 'T')
+    {
+        safetyDebugForceTrafoUntenPowered(true);
+        DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=ON");
+    }
+
+    if (c == 't')
+    {
+        safetyDebugForceTrafoUntenPowered(false);
+        DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=OFF");
     }
 
     return;
@@ -230,21 +214,22 @@ if (line[1] == '\0')
         return;
     }
 
-#if !MEGA2_SIM_MODE
-    if (cmd == 'o' || cmd == 'O' || cmd == 'i' || cmd == 'I' || cmd == 'k')
-    {
-        DBG_PRINTLN("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)");
-        return;
-    }
-#endif
-
     switch (cmd)
     {
         case 'o': g_bc.debugSetOccupied(n, true);  break;
         case 'O': g_bc.debugSetOccupied(n, false); break;
         case 'i': g_bc.debugSetStrom(n, true);     break;
         case 'I': g_bc.debugSetStrom(n, false);    break;
-        case 'k': g_bc.onShortCircuit(n);           break;
+        case 'k':
+        case 'K':
+#if MEGA2_SIM_MODE
+            g_bc.debugSetStromShort(n, (cmd == 'k'));
+                // 'k' => short ON, 'K' => short OFF
+            break;
+#else
+            DBG_PRINTLN("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)");
+#endif
+            break;
         case 'x':
         case 'X': g_bc.debugClear(n);              break;
     }
@@ -265,12 +250,10 @@ static void dbgHandleSerial()
 
         // ---------------------------------
         // SOFORTREAKTION für Single Keys
-        //   nur wenn noch KEINE Zeilen-Eingabe läuft
         // ---------------------------------
-        if (s_dbgLen == 0 &&
-            (ch == 'p' || ch == 'n' || ch == 'a' || ch == 't' || ch == 'T' || ch == 'x' || ch == 'X' || ch == 'y' || ch == 'Y' ||
-             (ch >= '1' && ch <= '6') ||
-             ch == 'r' || ch == 'd'))
+        if (ch == 'p' || ch == 'n' || ch == 'a' ||
+            ch == 'r' || ch == 'd' || ch == 'T' || ch == 't' ||
+            ((ch >= '1' && ch <= '6') && s_dbgLen == 0))
         {
             char tmp[2] = { ch, 0 };
             dbgProcessLine(tmp);
@@ -322,12 +305,11 @@ void setup()
     strom4.begin(); strom5.begin(); strom6.begin();
     stromSbhf1.begin(); stromSbhf2.begin(); stromSbhf3.begin();
 
-    g_trafoOben.begin();
-    g_trafoUnten.begin();
-
     initBlocks();
 
     g_power.begin();
+    g_trafoOben.begin();
+    g_trafoUnten.begin();
     g_sbhf.begin();
 
     w12.begin(); w13.begin(); w14.begin(); w15.begin();
@@ -347,7 +329,6 @@ void loop()
 
     g_trafoOben.update(now);
     g_trafoUnten.update(now);
-
 #if MEGA2_DEBUG
     dbgHandleSerial();
 #endif
@@ -384,20 +365,14 @@ void loop()
         buildMega2SystemStatus(g_systemStatus);
 
     #if MEGA2_DEBUG
-    static uint16_t lastFlags = 0xFFFF;
-    const uint16_t f = g_systemStatus.flags;
-
-    if (f != lastFlags)
-    {
-        Serial.print(F("SYS flags=0x"));
-        if (f < 0x1000) Serial.print('0');
-        if (f < 0x0100) Serial.print('0');
-        if (f < 0x0010) Serial.print('0');
-        Serial.println(f, HEX);
-
-        lastFlags = f;
-    }
-#endif
+        static uint8_t dbgDiv = 0;
+        if (++dbgDiv >= 10)
+        {
+            dbgDiv = 0;
+            Serial.print(F("SYS flags="));
+            Serial.println(g_systemStatus.flags, BIN);
+        }
+    #endif
 
         megaI2C_update();
     }

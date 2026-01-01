@@ -35,6 +35,23 @@ static constexpr uint32_t SSR_STUCK_DETECT_MS = 500;
 
 static SafetyBlockReason s_blockReason = SAFETY_BLOCK_BOOT;
 
+
+// -----------------------------------------------------------------------------
+// Kurzschluss-Erkennung (automatisch)
+// -----------------------------------------------------------------------------
+// Blöcke 1..9 sind die "realen" Strommess-Blöcke (SBhf-Gleise 1..3 sind 7..9).
+static constexpr uint8_t  SHORT_BLOCK_MIN   = 1;
+static constexpr uint8_t  SHORT_BLOCK_MAX   = 9;
+static constexpr uint16_t SHORT_I_MA        = 1800;  // ab hier "Kurzschluss vermuten"
+static constexpr uint16_t SHORT_CLEAR_MA    = 100;   // darunter gilt Strom als "weg"
+static constexpr uint16_t SHORT_CONFIRM_MS  = 200;   // so lange muss es anstehen
+
+// Für die "falsche Fahrtrichtung in Block 6"-Erkennung: Strom muss praktisch 0 sein.
+static constexpr uint16_t NO_CURRENT_MA     = 100;
+
+static uint32_t s_shortCondSinceMs[SHORT_BLOCK_MAX + 1] = {0};
+
+
 // --------------------------------------------------
 // SBHF-Servicefall: Reverse-Entry im Nothaltgleis (Block 6)
 // --------------------------------------------------
@@ -68,9 +85,7 @@ static void checkSsrStuck(uint32_t now)
 
     // Für beide SSRs prüfen: SSR AUS, aber Spannung bleibt anliegen
     for (uint8_t idx = 0; idx < 2; idx++)
-    {
-        
-        // SSR EIN => keine Stuck-Prüfung
+    {        // SSR EIN => keine Stuck-Prüfung
         if (s_ssrState[idx])
         {
             s_ssrStuckCondSinceMs[idx] = 0;
@@ -96,16 +111,16 @@ static void checkSsrStuck(uint32_t now)
             safetySetSSR(SafetySSR::SSR_TRAFO_A, false);
             safetySetSSR(SafetySSR::SSR_TRAFO_B, false);
 
-            s_ssrStuckCondSinceMs[0] = 0;
-            s_ssrStuckCondSinceMs[1] = 0;
+    s_ssrStuckCondSinceMs[0] = 0;
+    s_ssrStuckCondSinceMs[1] = 0;
 
             safetyErrorSet(SAFETY_ERR_SSR_STUCK, idx);
 
-            #if MEGA2_DEBUG
-                Serial.print(F("[SAFETY] EMERG_SSR_STUCK("));
-                Serial.print(idx == 0 ? F("A") : F("B"));
-                Serial.println(F(") -> SSR_A/B OFF, LOCK"));
-            #endif
+#if MEGA2_DEBUG
+            Serial.print(F("[SAFETY] EMERG_SSR_STUCK("));
+            Serial.print(idx == 0 ? F("A") : F("B"));
+            Serial.println(F(") -> SSR_A/B OFF, LOCK"));
+#endif
             return;
         }
     }
@@ -150,6 +165,57 @@ void safetyUpdate()
 
     const uint32_t now = millis();
 
+
+    // ---------------------------------------------------------
+    // Kurzschluss automatisch erkennen (nur wenn "Power ON")
+    // ---------------------------------------------------------
+    if (!safetyIsPowerOn())
+    {
+        for (uint8_t b = SHORT_BLOCK_MIN; b <= SHORT_BLOCK_MAX; b++)
+            s_shortCondSinceMs[b] = 0;
+    }
+    else
+    {
+        // Wenn ein anderer Fehler aktiv ist (z.B. SSR stuck), lassen wir ihn latches.
+        if (safetyErrorActive() && safetyErrorGet().type != SAFETY_ERR_BLOCK_SHORT)
+        {
+            for (uint8_t b = SHORT_BLOCK_MIN; b <= SHORT_BLOCK_MAX; b++)
+                s_shortCondSinceMs[b] = 0;
+        }
+        else
+        {
+            for (uint8_t b = SHORT_BLOCK_MIN; b <= SHORT_BLOCK_MAX; b++)
+            {
+                const uint16_t iMa = g_bc.stromFiltered(b);
+
+                if (iMa <= SHORT_CLEAR_MA)
+                {
+                    s_shortCondSinceMs[b] = 0;
+                    continue;
+                }
+
+                if (iMa >= SHORT_I_MA)
+                {
+                    if (s_shortCondSinceMs[b] == 0)
+                        s_shortCondSinceMs[b] = now;
+
+                    if ((now - s_shortCondSinceMs[b]) >= SHORT_CONFIRM_MS)
+                    {
+                        safetyTriggerBlockShort(b);
+                        for (uint8_t bb = SHORT_BLOCK_MIN; bb <= SHORT_BLOCK_MAX; bb++)
+                            s_shortCondSinceMs[bb] = 0;
+                        return;
+                    }
+                }
+                else
+                {
+                    // "irgendwo Strom", aber noch kein Kurzschluss – Timer nicht laufen lassen
+                    s_shortCondSinceMs[b] = 0;
+                }
+            }
+        }
+    }
+
     // --------------------------------------------------
     // EMERG_NOTHALT_SBHF (Servicefall Reverse-Entry Block 6)
     //
@@ -162,7 +228,7 @@ void safetyUpdate()
     const bool trafoPowered = isTrafoUntenPowered();
     const bool nothaltOn    = g_power.isNothaltActive();
     const bool b6occ        = g_bc.isOccupied(6);
-    const bool b6noI        = (g_bc.stromFiltered(6) == 0);
+    const bool b6noI        = (g_bc.stromFiltered(6) <= NO_CURRENT_MA);
 
     const bool cond = trafoPowered && nothaltOn && b6occ && b6noI;
 
@@ -303,14 +369,12 @@ bool safetyResetEmergency()
     if (s_emergNothaltSbhfLatched)
     {
         const bool block6Free  = !g_bc.isOccupied(6);
-        const bool nothaltFree = !g_power.isNothaltActive();
 
-        if (!block6Free || !nothaltFree)
+        if (!block6Free)
         {
 #if MEGA2_DEBUG
             Serial.print(F("[SAFETY] ACK blocked (EMERG_NOTHALT_SBHF): "));
             if (!block6Free)  Serial.print(F("Block6 still occupied "));
-            if (!nothaltFree) Serial.print(F("Nothalt still active "));
             Serial.println();
 #endif
             return false;
@@ -330,7 +394,7 @@ bool safetyResetEmergency()
         if (e.type == SAFETY_ERR_BLOCK_SHORT)
         {
             const uint8_t b = e.index;
-            if (g_bc.stromFiltered(b) > 0)
+            if (g_bc.stromFiltered(b) > SHORT_CLEAR_MA)
             {
 #if MEGA2_DEBUG
                 Serial.print(F("[SAFETY] ACK blocked (BLOCK_SHORT): Block"));
