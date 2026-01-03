@@ -3,9 +3,13 @@
 #include "BlockController.h"
 #include "ShadowYardController.h"
 #include "safety.h"
+#include "Mega2PowerControl.h"
+#include "SensorKontakt.h"
 
 extern BlockController& blockController;
 extern ShadowYardController& shadowController;
+extern Mega2PowerControl g_power;
+extern SensorKontakt k_nothalt;
 
 void mega2DebugDump()
 {
@@ -14,6 +18,14 @@ void mega2DebugDump()
     // -------- SAFETY --------
     DBG_PRINT(F("Safety: "));
     DBG_PRINTLN(safetyIsEmergencyActive() ? F("NOT-AUS") : F("OK"));
+
+    DBG_PRINT(F("  StopzoneActive="));
+    DBG_PRINT(g_power.isNothaltActive());
+    DBG_PRINT(F(" k_nothalt(raw)="));
+    DBG_PRINT(k_nothalt.raw());
+    DBG_PRINT(F(" I6="));
+    DBG_PRINT(blockController.stromFiltered(6));
+    DBG_PRINTLN(F("mA"));
 
     // -------- BLOCKS --------
     DBG_PRINTLN(F("Blocks:"));
