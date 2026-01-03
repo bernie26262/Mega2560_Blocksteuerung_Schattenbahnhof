@@ -3,6 +3,8 @@
 #include "BlockController.h"
 #include "ShadowYardController.h"
 #include "safety.h"
+#include "safety_error.h"
+
 #include "Mega2PowerControl.h"
 #include "SensorKontakt.h"
 
@@ -19,7 +21,14 @@ void mega2DebugDump()
     DBG_PRINT(F("Safety: "));
     DBG_PRINTLN(safetyIsEmergencyActive() ? F("NOT-AUS") : F("OK"));
 
-    DBG_PRINT(F("  StopzoneActive="));
+    const SafetyErrorInfo& err = safetyErrorGet();
+    DBG_PRINT(F("SafetyErr type="));
+    DBG_PRINT((uint8_t)err.type);
+    DBG_PRINT(F(" idx="));
+    DBG_PRINTLN(err.index);
+
+    // -------- STOPZONE / REVERSE-ENTRY DEBUG --------
+    DBG_PRINT(F("StopzoneActive="));
     DBG_PRINT(g_power.isNothaltActive());
     DBG_PRINT(F(" k_nothalt(raw)="));
     DBG_PRINT(k_nothalt.raw());

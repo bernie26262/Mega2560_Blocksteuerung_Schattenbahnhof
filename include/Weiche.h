@@ -16,6 +16,8 @@ public:
            SensorKontakt* rueckmelderAbbiegen);
 
     void begin();
+
+    uint8_t id() const { return m_id; }
     void update(uint32_t now);
 
     void schalte(Stellung s);

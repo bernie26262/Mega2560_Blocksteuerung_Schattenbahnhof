@@ -392,7 +392,10 @@ void ShadowYardController::triggerHardError()
     m_state = SBhfState::Error;
 
     // 🔴 Fehler: SBHF-Weiche
-    safetyErrorSet(SAFETY_ERR_SBH_WEICHE, m_weichenIndex + 1);
+        const uint8_t wid = (m_weichenIndex < m_weichenCount && m_weichen[m_weichenIndex])
+        ? m_weichen[m_weichenIndex]->id()
+        : static_cast<uint8_t>(m_weichenIndex + 1);
+    safetyErrorSet(SAFETY_ERR_SBH_WEICHE, wid);
 
     safetySetEmergency(true);
 }

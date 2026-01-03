@@ -45,7 +45,6 @@ public:
         return m_state; // LOW = aktiv = belegt
     }
 
-    // raw() liefert "belegt" als bool (true wenn LOW)
     bool raw() const {
 #if MEGA2_SIM_MODE
         if (m_debugForced) return m_debugOcc;
@@ -55,13 +54,10 @@ public:
 
 #if MEGA2_SIM_MODE
     // Debug/Test: Kontaktzustand erzwingen (Simulation)
-    // occupied=true  => "belegt" (LOW)
-    // occupied=false => "frei"   (HIGH)
     void debugForce(bool occupied)
     {
         m_debugForced = true;
         m_debugOcc    = occupied;
-
         // sofort wirksam
         m_lastRaw     = occupied;
         m_state       = occupied;

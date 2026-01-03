@@ -247,13 +247,14 @@ static void dbgProcessLine(const char* line, bool logCmd)
 
         // Trafo-Unten Force (SIM only)
 #if MEGA2_SIM_MODE
+        if (c=='T') { safetyDebugForceTrafoUntenPowered(true);  DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=ON"); }
+        if (c=='t') { safetyDebugForceTrafoUntenPowered(false); DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=OFF"); }
+
         // Stopzone-Kontakt (k_nothalt) Force (SIM only)
         if (c=='h') { k_nothalt.debugForce(true);  DBG_PRINTLN("[DBG] K_NOTHALT FORCED=OCC"); }
         if (c=='H') { k_nothalt.debugForce(false); DBG_PRINTLN("[DBG] K_NOTHALT FORCED=FREE"); }
-        if (c=='T') { safetyDebugForceTrafoUntenPowered(true);  DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=ON"); }
-        if (c=='t') { safetyDebugForceTrafoUntenPowered(false); DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=OFF"); }
 #else
-        if (c=='T' || c=='t') { DBG_PRINTLN("[DBG] Trafo-FORCE disabled (MEGA2_SIM_MODE=0)"); return; }
+        if (c=='T' || c=='t' || c=='h' || c=='H') { DBG_PRINTLN("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)"); return; }
 #endif
 
         s_forceSysFlagsPrint = true;
@@ -316,10 +317,9 @@ static void dbgHandleSerial()
         if (s_dbgLen == 0)
         {
             const bool isSingle =
-                (ch == 'p' || ch == 'n' || ch == 'a' || ch == 'r' || ch == 'd' ||
-                ch == 'T' || ch == 't' || ch == 'h' || ch == 'H') ||
-                ((ch >= '1' && ch <= '6') && MEGA2_SIM_MODE);
-
+                (ch == 'p' || ch == 'n' || ch == 'a' || ch == 'r' || ch == 'd' || ch == 'T' || ch == 't') ||
+                ((ch >= '1' && ch <= '6') && MEGA2_SIM_MODE) ||
+                ((ch == 'h' || ch == 'H') && MEGA2_SIM_MODE);
 
             if (isSingle)
             {
