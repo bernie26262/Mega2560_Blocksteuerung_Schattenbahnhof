@@ -1,107 +1,148 @@
 #include "Block.h"
+
+#include <Arduino.h>
+
 #include "SensorKontakt.h"
 #include "SensorStrom.h"
 #include "mega2_debug.h"
 
-// --------------------------------------------------
-// Konstruktor
-// --------------------------------------------------
+// Optional: Event-Logging pro Block (nur Edge, nicht "polling-spam")
+#ifndef MEGA2_DEBUG_BLOCK_EVENTS
+#define MEGA2_DEBUG_BLOCK_EVENTS 0
+#endif
+
+// Entprell-/Stabilitätsfenster (für "wirklich frei")
+static constexpr uint32_t STABLE_FREE_MS    = 500;
+static constexpr uint32_t STABLE_SIGNAL_MS  = 50;
+
+#if MEGA2_DEBUG && MEGA2_DEBUG_BLOCK_EVENTS
+static inline void dbgPrintBlockEvent(uint8_t id, const __FlashStringHelper* what, bool active)
+{
+    DBG_PRINT(F("[B"));
+    DBG_PRINT(id);
+    DBG_PRINT(F("] "));
+    DBG_PRINT(what);
+    DBG_PRINT(F(" "));
+    DBG_PRINTLN(active ? F("AKTIV") : F("frei"));
+}
+#endif
+
 Block::Block(uint8_t id,
-             SensorKontakt* k1,
+             SensorKontakt* kontakt1,
              SensorStrom* strom,
-             SensorKontakt* k2,
-             SensorKontakt* k3)
-: m_id(id),
-  m_kontakt1(k1),
-  m_kontakt2(k2),
-  m_kontakt3(k3),
-  m_strom(strom)
+             SensorKontakt* kontakt2,
+             SensorKontakt* kontakt3)
+: m_id(id)
+, m_kontakt1(kontakt1)
+, m_kontakt2(kontakt2)
+, m_kontakt3(kontakt3)
+, m_strom(strom)
+, m_kontaktAktiv(false)
+, m_stromAktiv(false)
+, m_besetzt(false)
+, m_lastFreeMs(0)
+, m_lastKontaktHighMs(0)
+, m_lastStromZeroMs(0)
 {
 }
 
-// --------------------------------------------------
-// Init
-// --------------------------------------------------
+static inline bool kontaktOcc(SensorKontakt* k)
+{
+    // SensorKontakt arbeitet mit INPUT_PULLUP; raw() ist im Projekt als "belegt/aktiv" definiert.
+    return k ? k->raw() : false;
+}
+
 void Block::begin()
 {
-    m_kontaktAktiv = false;
-    m_stromAktiv   = false;
-    m_lastFreeMs   = millis();
+    // Initialzustand aus den Sensoren lesen
+    const bool nowKontakt =
+        kontaktOcc(m_kontakt1) ||
+        kontaktOcc(m_kontakt2) ||
+        kontaktOcc(m_kontakt3);
 
-    m_lastKontaktHighMs = millis();
-    m_lastStromZeroMs   = millis();
+    const bool nowStrom = (m_strom ? m_strom->overThreshold() : false);
+
+    m_kontaktAktiv = nowKontakt;
+    m_stromAktiv   = nowStrom;
+    m_besetzt      = (nowKontakt || nowStrom);
+
+    const uint32_t now = millis();
+    m_lastKontaktHighMs = nowKontakt ? 0 : now;
+    m_lastStromZeroMs   = nowStrom   ? 0 : now;
+    m_lastFreeMs        = m_besetzt  ? 0 : now;
 }
 
-// --------------------------------------------------
-// Update
-// --------------------------------------------------
 void Block::update(uint32_t nowMs)
 {
-    updateContact(nowMs);
-    updateStrom(nowMs);
-}
+    const bool nowKontakt =
+        kontaktOcc(m_kontakt1) ||
+        kontaktOcc(m_kontakt2) ||
+        kontaktOcc(m_kontakt3);
 
-// --------------------------------------------------
-// Kontaktlogik
-// --------------------------------------------------
-void Block::updateContact(uint32_t nowMs)
-{
-    bool now =
-        (m_kontakt1 && m_kontakt1->isOccupied()) ||
-        (m_kontakt2 && m_kontakt2->isOccupied()) ||
-        (m_kontakt3 && m_kontakt3->isOccupied());
+    const bool nowStrom = (m_strom ? m_strom->overThreshold() : false);
 
-    if (now != m_kontaktAktiv)
+    // Kontakt-Edge
+    if (nowKontakt != m_kontaktAktiv)
     {
-        DBG_PRINT("[B"); DBG_PRINT(m_id);
-        DBG_PRINT("] Kontakt ");
-        DBG_PRINTLN(now ? "AKTIV" : "FREI");
+        m_kontaktAktiv = nowKontakt;
+        if (!nowKontakt) m_lastKontaktHighMs = nowMs;
+        else             m_lastKontaktHighMs = 0;
 
-        m_kontaktAktiv = now;
+    #if MEGA2_DEBUG && MEGA2_DEBUG_BLOCK_EVENTS
+        dbgPrintBlockEvent(m_id, F("Kontakt"), nowKontakt);
+    #endif
+    }
 
-        if (!now)
-            m_lastKontaktHighMs = nowMs;
+    // Strom-Edge
+    if (nowStrom != m_stromAktiv)
+    {
+        m_stromAktiv = nowStrom;
+        if (!nowStrom) m_lastStromZeroMs = nowMs;
+        else           m_lastStromZeroMs = 0;
+
+    #if MEGA2_DEBUG && MEGA2_DEBUG_BLOCK_EVENTS
+        dbgPrintBlockEvent(m_id, F("Strom"), nowStrom);
+    #endif
+    }
+
+    // Gesamtzustand
+    const bool nowBesetzt = (m_kontaktAktiv || m_stromAktiv);
+    if (nowBesetzt != m_besetzt)
+    {
+        m_besetzt = nowBesetzt;
+
+        if (!m_besetzt)
+            m_lastFreeMs = nowMs;
+        else
+            m_lastFreeMs = 0;
+
+    #if MEGA2_DEBUG && MEGA2_DEBUG_BLOCK_EVENTS
+        dbgPrintBlockEvent(m_id, F("Block"), m_besetzt);
+    #endif
     }
 }
 
-// --------------------------------------------------
-// Stromlogik
-// --------------------------------------------------
-void Block::updateStrom(uint32_t nowMs)
-{
-    bool now = (m_strom && m_strom->overThreshold());
-
-    if (now != m_stromAktiv)
-    {
-        DBG_PRINT("[B"); DBG_PRINT(m_id);
-        DBG_PRINT("] Strom ");
-        DBG_PRINTLN(now ? "AKTIV" : "0");
-
-        m_stromAktiv = now;
-
-        if (!now)
-            m_lastStromZeroMs = nowMs;
-    }
-}
-
-// --------------------------------------------------
-// Belegung
-// --------------------------------------------------
-bool Block::besetzt() const
-{
-    return m_kontaktAktiv || m_stromAktiv;
-}
-
-// --------------------------------------------------
-// Zeitlich stabile Freigabe (B4.1)
-// --------------------------------------------------
 bool Block::isReallyFree(uint32_t nowMs) const
 {
-    if (m_kontaktAktiv || m_stromAktiv)
+    if (m_besetzt) return false;
+
+    // Wenn nie gesetzt (z.B. direkt nach Boot), nehmen wir "frei" an
+    if (m_lastFreeMs == 0) return true;
+
+    if ((nowMs - m_lastFreeMs) < STABLE_FREE_MS)
         return false;
 
-    uint32_t dtKontakt = nowMs - m_lastKontaktHighMs;
-    uint32_t dtStrom   = nowMs - m_lastStromZeroMs;
+    // Optional: extra Stabilität pro Signal (falls Sensor-Prellen)
+    if (m_lastKontaktHighMs != 0 && (nowMs - m_lastKontaktHighMs) < STABLE_SIGNAL_MS)
+        return false;
 
-    return (dtKontakt >= 3000) && (dtStrom >= 3000);
+    if (m_lastStromZeroMs != 0 && (nowMs - m_lastStromZeroMs) < STABLE_SIGNAL_MS)
+        return false;
+
+    return true;
+}
+
+bool Block::besetzt() const
+{
+    return m_besetzt;
 }

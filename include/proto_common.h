@@ -43,7 +43,12 @@ enum SafetyBlockReason : uint8_t
 {
     SAFETY_BLOCK_NONE      = 0,
     SAFETY_BLOCK_BOOT      = 1,
-    SAFETY_BLOCK_EMERGENCY = 2
+    // Historisch: "EMERGENCY" (2) – wird beibehalten, aber wir unterscheiden
+    // künftig die Hauptursachen genauer.
+    SAFETY_BLOCK_EMERGENCY = 2,
+    SAFETY_BLOCK_NOTAUS    = 2,
+    SAFETY_BLOCK_SHORT     = 3,
+    SAFETY_BLOCK_SSR_STUCK = 4
 };
 
 struct Mega2SafetyStatus

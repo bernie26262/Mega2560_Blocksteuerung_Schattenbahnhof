@@ -5,7 +5,12 @@
 
 class Mega2PowerControl : public PowerControl {
 public:
+    // NOTE: PowerControl has no begin(); this is Mega2-specific init.
     void begin() {
+        // Global Power-Cut Relais (Trafo oben/unten) – low-aktiv ("CUT")
+        pinMode(PIN_RELAY_TRAFO_OBEN_CUT,  OUTPUT);
+        pinMode(PIN_RELAY_TRAFO_UNTEN_CUT, OUTPUT);
+
         pinMode(PIN_RELAY_BLOCK5_NACH_SBH, OUTPUT);
         pinMode(PIN_RELAY_SBH_GL1_NACH6,   OUTPUT);
         pinMode(PIN_RELAY_SBH_GL2_NACH6,   OUTPUT);
@@ -17,6 +22,9 @@ public:
         digitalWrite(PIN_RELAY_SBH_GL2_NACH6,   HIGH);
         digitalWrite(PIN_RELAY_SBH_GL3_NACH6,   HIGH);
         digitalWrite(PIN_RELAY_NOTHALT,         HIGH);
+
+        // Default: Boot-sicher → Power OFF (Cut aktiv)
+        setMainPower(false);
     }
 
     void setBlock5ToSBhf(bool on) override {
@@ -39,7 +47,41 @@ public:
     bool isNothaltActive() const {
         return m_nothaltActive;
     }
+
+    // ------------------------------------------------------------
+    // Safety / SSR API (für safety.cpp)
+    // ------------------------------------------------------------
+    void setMainPower(bool on)
+    {
+        m_mainPowerOn = on;
+
+        // "Main" bedeutet bei Mega2: beide Trafos freigeben/sperren
+        setSsrTrafoA(on);
+        setSsrTrafoB(on);
+    }
+
+    bool isMainPowerOn() const { return m_mainPowerOn; }
+
+    // SSR_TRAFO_A = Trafo oben (CUT Relais)
+    void setSsrTrafoA(bool enable)
+    {
+        m_ssrTrafoAEnabled = enable;
+        digitalWrite(PIN_RELAY_TRAFO_OBEN_CUT, enable ? HIGH : LOW);
+    }
+
+    // SSR_TRAFO_B = Trafo unten (CUT Relais)
+    void setSsrTrafoB(bool enable)
+    {
+        m_ssrTrafoBEnabled = enable;
+        digitalWrite(PIN_RELAY_TRAFO_UNTEN_CUT, enable ? HIGH : LOW);
+    }
+
+    bool isSsrTrafoA() const { return m_ssrTrafoAEnabled; }
+    bool isSsrTrafoB() const { return m_ssrTrafoBEnabled; }
     
 private:
     bool m_nothaltActive = false;
+    bool m_mainPowerOn = false;
+    bool m_ssrTrafoAEnabled = false;
+    bool m_ssrTrafoBEnabled = false;
 };

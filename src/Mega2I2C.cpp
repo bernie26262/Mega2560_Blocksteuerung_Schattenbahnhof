@@ -39,10 +39,34 @@ void i2cOnReceive(int len)
     const uint8_t cmd = Wire.read();
 
     // --------------------------------------------------
+    // SAFETY: Notaus setzen/löschen
+    // Payload: [0/1]
+    // --------------------------------------------------
+    if (cmd == M2_CMD_SET_NOTAUS)
+    {
+        if (len < 1 + 1)
+        {
+            s_cmdResponseOk      = 0;
+            s_cmdResponsePending = true;
+            return;
+        }
+
+        const uint8_t on = Wire.read();
+        safetySetEmergency(on != 0);
+
+        s_cmdResponseOk      = 1;
+        s_cmdResponsePending = true;
+        return;
+    }
+
+    // --------------------------------------------------
     // SAFETY: Notaus quittieren (ACK)
     // --------------------------------------------------
     if (cmd == M2_CMD_ACK_ERROR)
     {
+        // optional: mask wird aktuell ignoriert
+        if (len >= 1 + 1) (void)Wire.read();
+
         bool ok = safetyResetEmergency();
 
         s_cmdResponseOk      = ok ? 1 : 0;
@@ -67,27 +91,44 @@ void i2cOnReceive(int len)
         const uint8_t ssrIndex = Wire.read();
         const uint8_t enable   = Wire.read();
 
-    
-        
-        
         bool ok = false;
+        const bool en = (enable != 0);
 
-        // Niemals SSR schalten, wenn Notaus aktiv
-        if (!safetyIsEmergencyActive())
+        // Niemals einschalten, wenn Notaus aktiv oder Lock aktiv.
+        // Ausschalten ist immer erlaubt.
+        const bool allowEnable = (!en) || (!safetyIsEmergencyActive() && !safetyIsLocked());
+
+        if (allowEnable)
         {
-            if (ssrIndex == 0)
+            if (ssrIndex == SSR_MAIN_ENABLE)
             {
-                safetySetSSR(SafetySSR::SSR_TRAFO_A, enable != 0);
+                if (en) ok = safetyPowerOn();
+                else { safetySetSSR(SSR_MAIN_ENABLE, false); ok = true; }
+            }
+            else if (ssrIndex == SSR_TRAFO_A)
+            {
+                safetySetSSR(SSR_TRAFO_A, en);
                 ok = true;
             }
-            else if (ssrIndex == 1)
+            else if (ssrIndex == SSR_TRAFO_B)
             {
-                safetySetSSR(SafetySSR::SSR_TRAFO_B, enable != 0);
+                safetySetSSR(SSR_TRAFO_B, en);
                 ok = true;
             }
         }
 
 
+        s_cmdResponseOk      = ok ? 1 : 0;
+        s_cmdResponsePending = true;
+        return;
+    }
+
+    // --------------------------------------------------
+    // SAFETY: Power-On (explizit)
+    // --------------------------------------------------
+    if (cmd == M2_CMD_POWER_ON)
+    {
+        const bool ok = safetyPowerOn();
         s_cmdResponseOk      = ok ? 1 : 0;
         s_cmdResponsePending = true;
         return;

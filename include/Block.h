@@ -41,6 +41,7 @@ private:
     // --- Status (einheitlich!) ---
     bool     m_kontaktAktiv = false;
     bool     m_stromAktiv   = false;
+    bool     m_besetzt      = false;
     uint32_t m_lastFreeMs   = 0;
 
     // --- Zeitstempel ---

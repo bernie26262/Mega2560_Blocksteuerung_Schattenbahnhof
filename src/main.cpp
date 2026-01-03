@@ -3,11 +3,14 @@
 
 #include "mega2_pins.h"
 
+#ifndef MEGA2_SIM_MODE
+#define MEGA2_SIM_MODE 0
+#endif
+
 // Nothalt-Kontaktgleis (Stopzone-Kontakt) – muss in Block 6 Belegung einfließen
 #ifndef PIN_KONTAKT_NOTHALT
 #define PIN_KONTAKT_NOTHALT 19
 #endif
-
 
 #include "Block.h"
 #include "BlockController.h"
@@ -38,9 +41,13 @@
 // einen Controller-Neustart zuverlässig zu erkennen,
 // auch wenn die Verbindung kurzzeitig unterbrochen war.
 uint16_t g_bootId = 0;
+
 // --------------------- BLOCKS -----------------------------------------------
-Block* g_blocks[16];
-BlockController g_bc(g_blocks, 16);
+// IDs sind 1-basiert (Index 0 bleibt nullptr)
+static constexpr uint8_t BLOCK_COUNT = 9;
+
+Block* g_blocks[16];                 // Reserve, aber count() = 9
+BlockController g_bc(g_blocks, BLOCK_COUNT);
 BlockController& blockController = g_bc;
 
 // --------------------- POWER CONTROL ----------------------------------------
@@ -81,23 +88,24 @@ SensorStrom stromSbhf2(PIN_ADC_SBH_GL2);
 SensorStrom stromSbhf3(PIN_ADC_SBH_GL3);
 
 // --------------------- BLOCK-OBJEKTE ----------------------------------------
-void initBlocks()
+static void initBlocks()
 {
-    g_blocks[0] = nullptr;
+    for (auto &b : g_blocks) b = nullptr;
 
     g_blocks[1] = new Block(1, &k_block1, &strom1);
     g_blocks[2] = new Block(2, &k_block2, &strom2, &k_bhf2a, &k_bhf2b);
     g_blocks[3] = new Block(3, &k_block3, &strom3);
     g_blocks[4] = new Block(4, &k_block4, &strom4, &k_bhf4a, &k_bhf4b);
     g_blocks[5] = new Block(5, &k_block5, &strom5);
+    // Block 6: zusätzlicher Kontakt "Stopzone / Nothalt"
     g_blocks[6] = new Block(6, &k_block6, &strom6, &k_nothalt);
 
     g_blocks[7] = new Block(7, &k_sbhf1, &stromSbhf1);
     g_blocks[8] = new Block(8, &k_sbhf2, &stromSbhf2);
     g_blocks[9] = new Block(9, &k_sbhf3, &stromSbhf3);
 
-    for (int i = 1; i <= 9; i++)
-        g_blocks[i]->begin();
+    for (int i = 1; i <= BLOCK_COUNT; i++)
+        if (g_blocks[i]) g_blocks[i]->begin();
 }
 
 // --------------------- SCHALTGLEISE -----------------------------------------
@@ -148,71 +156,128 @@ static const uint32_t PAYLOAD_UPDATE_MS = 100;
 static char s_dbgBuf[24];
 static uint8_t s_dbgLen = 0;
 
-static void dbgProcessLine(const char* line)
+static bool s_forceSysFlagsPrint = false;
+
+static void dbgPrintSysFlags(uint16_t flags)
+{
+    Serial.print(F("SYS flags=0b"));
+    Serial.print(flags, BIN);
+    Serial.print(F(" ["));
+
+    bool first = true;
+    auto add = [&](const __FlashStringHelper* name)
+    {
+        if (!first) Serial.print(F(","));
+        Serial.print(name);
+        first = false;
+    };
+
+    if (flags == 0)
+    {
+        add(F("OK"));
+    }
+    else
+    {
+        if (flags & SYS_NOTAUS_ACTIVE)   add(F("NOTAUS"));
+        if (flags & SYS_POWER_ON)        add(F("PWR"));
+        if (flags & SYS_ERROR_PRESENT)   add(F("ERR"));
+        uint16_t unknown = flags & ~(SYS_NOTAUS_ACTIVE | SYS_POWER_ON | SYS_ERROR_PRESENT);
+        if (unknown)
+        {
+            if (!first) Serial.print(F(","));
+            Serial.print(F("UNK=0x"));
+            Serial.print(unknown, HEX);
+            first = false;
+        }
+    }
+
+    Serial.println(F("]"));
+}
+
+static void dbgProcessLine(const char* line, bool logCmd)
 {
     if (!line || !line[0]) return;
 
-    // Single keys
-    // Single keys
-if (line[1] == '\0')
-{
-    char c = line[0];
-
-    // Shadow yard debug
-    if (c=='1') g_sbhf.onS11();
-    if (c=='2') g_sbhf.onS12();
-    if (c=='3') g_sbhf.onS13();
-    if (c=='4') g_sbhf.onS14();
-    if (c=='5') g_sbhf.onS15();
-    if (c=='6') g_sbhf.onS16();
-    if (c=='r') g_sbhf.onResetAck();
-    if (c=='d') mega2DebugDump();
-
-    // -----------------------------
-    // SAFETY DEBUG (M2.1)
-    // -----------------------------
-    if (c == 'p')
+    if (logCmd)
     {
-        bool ok = safetyPowerOn();
-        DBG_PRINTLN(ok ? "[DBG] POWER ON OK" : "[DBG] POWER ON BLOCKED");
+        Serial.print(F("[DBG] CMD="));
+        Serial.println(line);
     }
 
-    if (c == 'n')
+    // -------------------------
+    // Single-Key Commands
+    // -------------------------
+    if (line[1] == '\0')
     {
-        safetySetEmergency(true);
-        DBG_PRINTLN("[DBG] NOTHALT");
+        const char c = line[0];
+
+        // Shadow yard debug: Sensors (SIM only)
+#if MEGA2_SIM_MODE
+        if (c=='1') g_sbhf.onS11();
+        if (c=='2') g_sbhf.onS12();
+        if (c=='3') g_sbhf.onS13();
+        if (c=='4') g_sbhf.onS14();
+        if (c=='5') g_sbhf.onS15();
+        if (c=='6') g_sbhf.onS16();
+#else
+        if (c>='1' && c<='6') { DBG_PRINTLN("[DBG] SIM sensor keys disabled (MEGA2_SIM_MODE=0)"); return; }
+#endif
+
+        if (c=='r') g_sbhf.onResetAck();
+        if (c=='d') mega2DebugDump();
+
+        // SAFETY debug
+        if (c == 'p')
+        {
+            const bool ok = safetyPowerOn();
+            DBG_PRINTLN(ok ? "[DBG] POWER ON OK" : "[DBG] POWER ON BLOCKED");
+        }
+
+        if (c == 'n')
+        {
+            safetySetEmergency(true);
+            DBG_PRINTLN("[DBG] NOTHALT");
+        }
+
+        if (c == 'a')
+        {
+            const bool ok = safetyResetEmergency();
+            DBG_PRINTLN(ok ? "[DBG] ACK OK" : "[DBG] ACK BLOCKED");
+        }
+
+        // Trafo-Unten Force (SIM only)
+#if MEGA2_SIM_MODE
+        if (c=='T') { safetyDebugForceTrafoUntenPowered(true);  DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=ON"); }
+        if (c=='t') { safetyDebugForceTrafoUntenPowered(false); DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=OFF"); }
+#else
+        if (c=='T' || c=='t') { DBG_PRINTLN("[DBG] Trafo-FORCE disabled (MEGA2_SIM_MODE=0)"); return; }
+#endif
+
+        s_forceSysFlagsPrint = true;
+        return;
     }
 
-    if (c == 'a')
-    {
-        bool ok = safetyResetEmergency();
-        DBG_PRINTLN(ok ? "[DBG] ACK OK" : "[DBG] ACK BLOCKED");
-    }
+    // -------------------------
+    // Line Commands: o6/O6/i6/I6/k6/K6/x6
+    // -------------------------
+    const char cmd = line[0];
+    const int n    = atoi(&line[1]);
 
-    if (c == 'T')
-    {
-        safetyDebugForceTrafoUntenPowered(true);
-        DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=ON");
-    }
-
-    if (c == 't')
-    {
-        safetyDebugForceTrafoUntenPowered(false);
-        DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=OFF");
-    }
-
-    return;
-}
-
-
-    char cmd = line[0];
-    int n = atoi(&line[1]);
-
-    if (n < 1 || n > 9)
+    if (n < 1 || n > BLOCK_COUNT)
     {
         DBG_PRINTLN("[DBG] Block-ID 1..9");
         return;
     }
+
+#if !MEGA2_SIM_MODE
+    // In HW-Modus keine Manipulation per Serial zulassen
+    if (cmd=='o' || cmd=='O' || cmd=='i' || cmd=='I' ||
+        cmd=='x' || cmd=='X' || cmd=='k' || cmd=='K')
+    {
+        DBG_PRINTLN("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)");
+        return;
+    }
+#endif
 
     switch (cmd)
     {
@@ -220,67 +285,77 @@ if (line[1] == '\0')
         case 'O': g_bc.debugSetOccupied(n, false); break;
         case 'i': g_bc.debugSetStrom(n, true);     break;
         case 'I': g_bc.debugSetStrom(n, false);    break;
+
         case 'k':
         case 'K':
 #if MEGA2_SIM_MODE
+            // 'k' => short ON, 'K' => short OFF
             g_bc.debugSetStromShort(n, (cmd == 'k'));
-                // 'k' => short ON, 'K' => short OFF
-            break;
 #else
             DBG_PRINTLN("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)");
 #endif
             break;
+
         case 'x':
         case 'X': g_bc.debugClear(n);              break;
     }
+
+    s_forceSysFlagsPrint = true;
 }
 
 static void dbgHandleSerial()
 {
-     if (Serial.available())
-    {
-        Serial.println("[DBG] SERIAL INPUT DETECTED");
-    }
-
     while (Serial.available())
     {
-        char ch = Serial.read();
-        Serial.print("[DBG] CHAR=");
-        Serial.println(ch);
+        const char ch = static_cast<char>(Serial.read());
 
-        // ---------------------------------
-        // SOFORTREAKTION für Single Keys
-        // ---------------------------------
-        if (ch == 'p' || ch == 'n' || ch == 'a' ||
-            ch == 'r' || ch == 'd' || ch == 'T' || ch == 't' ||
-            ((ch >= '1' && ch <= '6') && s_dbgLen == 0))
+        // Single-Key sofort (nur wenn keine Zeile im Aufbau ist)
+        if (s_dbgLen == 0)
         {
-            char tmp[2] = { ch, 0 };
-            dbgProcessLine(tmp);
-            s_dbgLen = 0;
-            continue;
+            const bool isSingle =
+                (ch == 'p' || ch == 'n' || ch == 'a' || ch == 'r' || ch == 'd' || ch == 'T' || ch == 't') ||
+                ((ch >= '1' && ch <= '6') && MEGA2_SIM_MODE);
+
+            if (isSingle)
+            {
+                char tmp[2] = { ch, 0 };
+                dbgProcessLine(tmp, /*logCmd=*/true);
+                continue;
+            }
         }
 
-        // ---------------------------------
-        // Klassischer Zeilenmodus
-        // ---------------------------------
+        // Zeilenmodus
         if (ch == '\n' || ch == '\r')
         {
             s_dbgBuf[s_dbgLen] = 0;
             if (s_dbgLen)
-                dbgProcessLine(s_dbgBuf);
+                dbgProcessLine(s_dbgBuf, /*logCmd=*/true);
             s_dbgLen = 0;
         }
         else if (s_dbgLen < sizeof(s_dbgBuf) - 1)
         {
             s_dbgBuf[s_dbgLen++] = ch;
         }
+        else
+        {
+            // Buffer voll -> verwerfen
+            s_dbgLen = 0;
+        }
     }
 }
 
-#else
-    DBG_PRINTLN("[DBG] Block debug disabled");
-#endif
+static void dbgMaybePrintSysFlags(uint16_t flags)
+{
+    static uint16_t lastFlags = 0xFFFF;
+
+    if (flags != lastFlags || s_forceSysFlagsPrint)
+    {
+        dbgPrintSysFlags(flags);
+        lastFlags = flags;
+        s_forceSysFlagsPrint = false;
+    }
+}
+#endif // MEGA2_DEBUG
 
 // ============================================================================
 // SETUP
@@ -289,18 +364,25 @@ void setup()
 {
     // Neue Boot-Instanz signalisieren
     g_bootId++;
-    
+
     DBG_BEGIN(115200);
     while (!Serial && millis() < 1000) {}
 
     safetyBegin();
 
+    // Kontaktgleise
     k_block1.begin(); k_block2.begin(); k_block3.begin();
     k_block4.begin(); k_block5.begin(); k_block6.begin();
+    k_nothalt.begin();
+
     k_sbhf1.begin();  k_sbhf2.begin();  k_sbhf3.begin();
     k_bhf2a.begin();  k_bhf2b.begin();
     k_bhf4a.begin();  k_bhf4b.begin();
 
+    // Weichen-RM
+    sensorW12.begin(); sensorW13.begin(); sensorW14.begin(); sensorW15.begin();
+
+    // Stromsensoren
     strom1.begin(); strom2.begin(); strom3.begin();
     strom4.begin(); strom5.begin(); strom6.begin();
     stromSbhf1.begin(); stromSbhf2.begin(); stromSbhf3.begin();
@@ -325,10 +407,11 @@ void setup()
 // ============================================================================
 void loop()
 {
-    uint32_t now = millis();
+    const uint32_t now = millis();
 
     g_trafoOben.update(now);
     g_trafoUnten.update(now);
+
 #if MEGA2_DEBUG
     dbgHandleSerial();
 #endif
@@ -365,13 +448,7 @@ void loop()
         buildMega2SystemStatus(g_systemStatus);
 
     #if MEGA2_DEBUG
-        static uint8_t dbgDiv = 0;
-        if (++dbgDiv >= 10)
-        {
-            dbgDiv = 0;
-            Serial.print(F("SYS flags="));
-            Serial.println(g_systemStatus.flags, BIN);
-        }
+        dbgMaybePrintSysFlags(g_systemStatus.flags);
     #endif
 
         megaI2C_update();
