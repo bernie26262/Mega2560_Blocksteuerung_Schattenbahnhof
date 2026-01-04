@@ -35,6 +35,9 @@ void mega2DebugDump()
     DBG_PRINT(F(" I6="));
     DBG_PRINT(blockController.stromFiltered(6));
     DBG_PRINTLN(F("mA"));
+    DBG_PRINTF(" allowedMask=0x%02X warningMask=0x%02X\n",
+               shadowController.allowedGleisMask(),
+               shadowController.warningMask());
 
     // -------- BLOCKS --------
     DBG_PRINTLN(F("Blocks:"));
@@ -54,6 +57,8 @@ void mega2DebugDump()
     DBG_PRINT((uint8_t)shadowController.state());
     DBG_PRINT(F(" ausfahrGleis="));
     DBG_PRINTLN(shadowController.ausfahrGleis());
+
+    DBG_PRINTF("SBHF allowedMask=0x%02X warnMask=0x%02X\n", shadowController.allowedGleisMask(), shadowController.warningMask());
 
     DBG_PRINTLN(F("======================"));
 }

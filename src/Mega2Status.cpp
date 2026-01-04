@@ -110,5 +110,13 @@ void buildMega2SystemStatus(SystemStatus& out)
         if (g_bc.isOccupied(7 + i))
             out.sbhfOccupiedMask |= (1 << i);
 
-    out.reserved = 0;
+    // SBHF warnings/allowed mask -> reserved (Variant A)
+    const uint8_t allowedMask = g_sbhf.allowedGleisMask();
+    const uint8_t warningMask = g_sbhf.warningMask();
+
+    if (warningMask != 0)
+        out.flags |= SYS_WARNING_PRESENT;
+
+    out.reserved = (static_cast<uint16_t>(allowedMask) << 8) | warningMask;
 }
+

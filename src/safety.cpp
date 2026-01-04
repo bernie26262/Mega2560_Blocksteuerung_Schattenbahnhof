@@ -41,8 +41,8 @@ static constexpr uint32_t POWER_STABLE_MS         = 400;  // nach SSR-Schaltvorg
 static constexpr uint32_t SAFETY_TICK_MAX_GAP_MS  = 1000;
 
 // SBHF Weichenfehler: ACK->Retry Timeout
-static constexpr uint32_t WEICHE_RETRY_TIMEOUT_MS = 4000;
 static constexpr uint32_t SSR_STUCK_DELAY_MS   = 250;
+static constexpr uint32_t SBHF_SELFTEST_TIMEOUT_MS = 15000;
 
 // ============================================================================
 // Status
@@ -58,9 +58,9 @@ static uint32_t          s_lastPowerSwitchMs = 0;
 static uint32_t          s_lastSafetyUpdateMs = 0;
 static uint32_t          s_doubleOccStartMs[16] = {0};
 
-// SBHF Weichenfehler: ACK->Retry
-static bool              s_weicheRetryPending = false;
-static uint32_t          s_weicheRetryStartMs = 0;
+// SBHF Weichenfehler: ACK -> Selftest (ShadowYardController)
+static bool              s_sbhfSelftestPending = false;
+static uint32_t          s_sbhfSelftestStartMs = 0;
 
 // Reverse-Entry / Nothalt-Kontakt-Fall (SBHF soll weiterlaufen, Reset nur Safety)
 static bool              s_emergNothaltSbhfLatched = false;
@@ -133,6 +133,8 @@ void safetyBegin()
     s_lastPowerOnMs   = 0;
     s_lastSsrBOffMs   = 0;
     s_emergNothaltSbhfLatched = false;
+    s_sbhfSelftestPending = false;
+    s_sbhfSelftestStartMs = 0;
 }
 
 bool safetyIsEmergencyActive() { return s_emergencyActive; }
@@ -253,23 +255,25 @@ bool safetyResetEmergency()
     }
 
     // ------------------------------------------------------------
-    // 4) SBHF Weichenfehler:
-    //    ACK startet Retry über SBHF-Reset, bleibt aber solange im Emergency,
-    //    bis der SBHF wieder stabil läuft (Freigabe in safetyUpdate()).
+    // 4) SBHF Weichenfehler (W12/W13 kritisch):
+    //    ACK startet IMMER einen Selbsttest auf Mega2.
+    //    SafetyLock bleibt während des Selbsttests aktiv.
+    //    Nach Selftest: entweder Normalbetrieb (kein Warn),
+    //    oder eingeschränkter Betrieb (Warn + allowedMask),
+    //    oder kein sicherer Pfad (Lock bleibt).
     // ------------------------------------------------------------
     if (err.type == SAFETY_ERR_SBH_WEICHE)
     {
-        if (!shadowController.canReset())
+        if (!shadowController.startSelftest(true /*include W14/W15*/))
         {
-            DBG_PRINTLN("[SAFETY] ACK blocked (SBH_WEICHE): SBHF reset conditions not met");
+            DBG_PRINTLN("[SAFETY] ACK blocked (SBH_WEICHE): selftest could not start");
             return false;
         }
 
-        shadowController.onResetAck();
-        s_weicheRetryPending = true;
-        s_weicheRetryStartMs = millis();
+        s_sbhfSelftestPending = true;
+        s_sbhfSelftestStartMs = millis();
 
-        DBG_PRINTLN("[SAFETY] ACK accepted (SBH_WEICHE): retry started");
+        DBG_PRINTLN("[SAFETY] ACK accepted (SBH_WEICHE): selftest started");
         return true;
     }
 
@@ -307,7 +311,8 @@ bool safetyResetEmergency()
         s_blockReason     = SAFETY_BLOCK_BOOT;
 
         s_emergNothaltSbhfLatched = false;
-        s_weicheRetryPending      = false;
+        s_sbhfSelftestPending = false;
+        s_sbhfSelftestStartMs = 0;
         return true;
     }
 
@@ -372,38 +377,45 @@ void safetyUpdate()
     s_lastSafetyUpdateMs = now;
 
     // ------------------------------------------------------------
-    // SBHF Weichenfehler: Retry-Freigabe nach ACK
+    // SBHF Weichenfehler: Selftest-Auswertung nach ACK
     // ------------------------------------------------------------
-    if (s_weicheRetryPending && s_emergencyActive && safetyErrorGet().type == SAFETY_ERR_SBH_WEICHE)
+    if (s_sbhfSelftestPending && s_emergencyActive && safetyErrorGet().type == SAFETY_ERR_SBH_WEICHE)
     {
-        const SBhfState st = shadowController.state();
-
-        // Erfolg: Weichen-Setup abgeschlossen und SBHF läuft wieder
-        if (st == SBhfState::WaitBlock6 || st == SBhfState::ExitRunning || st == SBhfState::Idle)
+        if (shadowController.isSelftestDone())
         {
-            s_weicheRetryPending = false;
+            s_sbhfSelftestPending = false;
+            shadowController.clearSelftestDone();
 
-            safetyErrorClear();
-            s_emergencyActive = false;
-            s_lock            = false;
-            s_blockReason     = SAFETY_BLOCK_NONE;
+            const uint8_t allowed = shadowController.allowedGleisMask();
+            const uint8_t warn    = shadowController.warningMask();
 
-            DBG_PRINTLN("[SAFETY] SBHF weiche retry OK -> UNLOCK");
+            if (allowed == 0)
+            {
+                // Kein sicherer Pfad ableitbar -> bleibt LOCKED
+                DBG_PRINTLN("[SAFETY] SBHF selftest FAIL(no-safe) -> still locked");
+            }
+            else
+            {
+                // SBHF Error-Reset + Fortsetzen (wenn Resume-Gleis erlaubt)
+                if (shadowController.canReset())
+                    shadowController.onResetAck();
+
+                safetyErrorClear();
+                s_emergencyActive = false;
+                s_lock            = false;
+                s_blockReason     = SAFETY_BLOCK_NONE;
+
+                DBG_PRINTF("[SAFETY] SBHF selftest OK -> UNLOCK (allowed=0x%02X warn=0x%02X)\n", allowed, warn);
+            }
         }
-        else if (st == SBhfState::Error)
+        else if ((now - s_sbhfSelftestStartMs) > SBHF_SELFTEST_TIMEOUT_MS)
         {
-            // erneuter Fehler -> bleibt emergency
-            s_weicheRetryPending = false;
-            DBG_PRINTLN("[SAFETY] SBHF weiche retry FAILED -> still locked");
-        }
-        else if ((now - s_weicheRetryStartMs) > WEICHE_RETRY_TIMEOUT_MS)
-        {
-            s_weicheRetryPending = false;
-            DBG_PRINTLN("[SAFETY] SBHF weiche retry TIMEOUT -> still locked");
+            s_sbhfSelftestPending = false;
+            DBG_PRINTLN("[SAFETY] SBHF selftest TIMEOUT -> still locked");
         }
     }
 
-    // ------------------------------------------------------------
+        // ------------------------------------------------------------
     // Reverse-Entry / Stopzone / NOTAUS:
     // Trigger wenn:
     // 1) Nothaltgleis ist AUS

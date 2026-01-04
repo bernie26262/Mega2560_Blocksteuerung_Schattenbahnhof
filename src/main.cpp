@@ -181,7 +181,8 @@ static void dbgPrintSysFlags(uint16_t flags)
         if (flags & SYS_NOTAUS_ACTIVE)   add(F("NOTAUS"));
         if (flags & SYS_POWER_ON)        add(F("PWR"));
         if (flags & SYS_ERROR_PRESENT)   add(F("ERR"));
-        uint16_t unknown = flags & ~(SYS_NOTAUS_ACTIVE | SYS_POWER_ON | SYS_ERROR_PRESENT);
+        if (flags & SYS_WARNING_PRESENT) add(F("WARN"));
+        uint16_t unknown = flags & ~(SYS_NOTAUS_ACTIVE | SYS_POWER_ON | SYS_ERROR_PRESENT | SYS_WARNING_PRESENT);
         if (unknown)
         {
             if (!first) Serial.print(F(","));

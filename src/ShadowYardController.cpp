@@ -52,6 +52,7 @@ void ShadowYardController::begin()
     m_errorActive = false;
     m_exitPowerOn = false;
 
+
     m_resumePending = false;
     m_resumeGleis = 0;
     m_resumeState = SBhfState::Idle;
@@ -81,10 +82,17 @@ bool ShadowYardController::weicheSoll(uint8_t idx) const
 
 bool ShadowYardController::isSafetyBlocked() const
 {
-    // Minimaler, deterministischer Gate: sobald SBhf im Error ist, keine Sensor-Events mehr.
-    // (Weitere globale Safety-Gates können später ergänzt werden, z.B. selftestRunning / safetyLock).
-    return (m_state == SBhfState::Error) || m_errorActive;
+    // Gate für SBhf-Sensor-Events:
+    // - SBhf im Error
+    // - Selftest läuft
+    // - globaler Safety-Lock / NOTAUS
+    return (m_state == SBhfState::Error) ||
+           m_errorActive ||
+           m_selftestActive ||
+           safetyIsLocked() ||
+           safetyIsEmergencyActive();
 }
+
 
 // ============================================================
 // Events
@@ -95,6 +103,12 @@ void ShadowYardController::onS11()
     if (m_state == SBhfState::Error)
     {
         DBG_PRINTLN("[SBHF] S11 ignored because SBhfState::Error");
+        return;
+    }
+
+    if (safetyIsLocked() || safetyIsEmergencyActive() || m_selftestActive)
+    {
+        DBG_PRINTLN("[SBHF] S11 ignored (SAFETY-LOCK)");
         return;
     }
 
@@ -118,6 +132,7 @@ void ShadowYardController::onS12()
     {
         g_power.setSbhfGleis(1, false);
         m_exitPowerOn = false;
+
         m_state = SBhfState::Idle;
     }
 }
@@ -134,6 +149,7 @@ void ShadowYardController::onS13()
     {
         g_power.setSbhfGleis(2, false);
         m_exitPowerOn = false;
+
         m_state = SBhfState::Idle;
     }
 }
@@ -150,6 +166,7 @@ void ShadowYardController::onS14()
     {
         g_power.setSbhfGleis(3, false);
         m_exitPowerOn = false;
+
         m_state = SBhfState::Idle;
     }
 }
@@ -188,6 +205,17 @@ void ShadowYardController::onS16()
 
 void ShadowYardController::update(uint32_t nowMs)
 {
+    if (m_selftestActive)
+    {
+        selftestUpdate(nowMs);
+        return;
+    }
+
+    // SafetyLock / NOTAUS: SBHF-Automat darf keine Aktionen durchführen
+    if (safetyIsLocked() || safetyIsEmergencyActive())
+        return;
+
+
     if (m_errorActive)
         return;
 
@@ -230,24 +258,68 @@ void ShadowYardController::update(uint32_t nowMs)
 
 uint8_t ShadowYardController::pickNextGleis()
 {
+    if (m_allowedMask == 0)
+        return 0; // kein sicherer Pfad ableitbar
+
+    auto isAllowed = [&](uint8_t g) -> bool
+    {
+        if (g < 1 || g > 3) return false;
+        return (m_allowedMask & (1 << (g - 1))) != 0;
+    };
+
     if (m_mode == SbhfMode::Sequential)
     {
-        uint8_t g = m_nextGleis;
-        m_nextGleis = (m_nextGleis % 3) + 1;
-        return g;
+        // Nächster Index, aber nur erlaubte Gleise wählen
+        for (uint8_t tries = 0; tries < 3; tries++)
+        {
+            uint8_t g = m_nextGleis;
+            if (g < 1 || g > 3) g = 1;
+
+            // Next pointer rotieren
+            m_nextGleis = (g % 3) + 1;
+
+            if (isAllowed(g))
+                return g;
+        }
+
+        // Fallback: erstes erlaubtes Gleis
+        for (uint8_t g = 1; g <= 3; g++)
+            if (isAllowed(g)) return g;
+
+        return 0;
     }
 
+    // Random
     return pickRandomGleisNoRepeat(m_currentGleis);
 }
 
+
 uint8_t ShadowYardController::pickRandomGleisNoRepeat(uint8_t last)
 {
-    uint8_t g;
-    do {
-        g = random(1, 4);
-    } while (g == last);
-    return g;
+    uint8_t allowed[3];
+    uint8_t cnt = 0;
+    for (uint8_t g = 1; g <= 3; g++)
+    {
+        if (m_allowedMask & (1 << (g - 1)))
+            allowed[cnt++] = g;
+    }
+
+    if (cnt == 0)
+        return 0;
+
+    if (cnt == 1)
+        return allowed[0];
+
+    // Wenn möglich: nicht das gleiche Gleis wie zuvor
+    for (uint8_t tries = 0; tries < 8; tries++)
+    {
+        uint8_t g = allowed[random(0, cnt)];
+        if (g != last) return g;
+    }
+
+    return allowed[0];
 }
+
 
 // ============================================================
 // Weichen
@@ -359,8 +431,20 @@ void ShadowYardController::processWeichenSequence(uint32_t nowMs)
             if (elapsed < WEICHE_TIMEOUT_MS)
                 return;
 
-            // Timeout → HARD ERROR
-            triggerHardError();
+            const uint8_t wid = w->id();
+
+            // Timeout → bei W12/W13: HARD ERROR, bei W14/W15: Warning und weiter
+            if (isCriticalWeiche(wid))
+            {
+                triggerHardError(wid);
+                return;
+            }
+
+            setWarningForWeiche(wid);
+            DBG_PRINTF("[SBHF] Weiche %d soft-fail (timeout/mismatch) -> WARNING, continue\n", wid);
+
+            m_weichenIndex++;
+            m_wphase = WPhase::Idle;
             return;
         }
     }
@@ -370,7 +454,7 @@ void ShadowYardController::processWeichenSequence(uint32_t nowMs)
 // Fehler / Reset (D3)
 // ============================================================
 
-void ShadowYardController::triggerHardError()
+void ShadowYardController::triggerHardError(uint8_t weicheId)
 {
     if (m_errorActive)
         return;
@@ -391,22 +475,23 @@ void ShadowYardController::triggerHardError()
     m_errorActive = true;
     m_state = SBhfState::Error;
 
-    // 🔴 Fehler: SBHF-Weiche
-        const uint8_t wid = (m_weichenIndex < m_weichenCount && m_weichen[m_weichenIndex])
-        ? m_weichen[m_weichenIndex]->id()
-        : static_cast<uint8_t>(m_weichenIndex + 1);
-    safetyErrorSet(SAFETY_ERR_SBH_WEICHE, wid);
+    // Defekt-Bit für Debug/Status setzen (Selftest wird später final entscheiden)
+    setWarningForWeiche(weicheId);
+
+    // 🔴 Fehler: SBHF-Weiche (W12/W13 sicherheitskritisch)
+    safetyErrorSet(SAFETY_ERR_SBH_WEICHE, weicheId);
 
     safetySetEmergency(true);
 }
+
 
 bool ShadowYardController::canReset() const
 {
     if (m_state != SBhfState::Error)
         return false;
 
-    // Reset NUR wenn Not-Aus freigegeben ist
-    if (g_power.isNothaltActive())
+    // Kein Reset während Selftest läuft
+    if (m_selftestActive)
         return false;
 
     // Keine aktive Ausfahrt
@@ -437,10 +522,6 @@ void ShadowYardController::onResetAck()
         {
             DBG_PRINTLN("[SBHF] RESET ignored (not in Error)");
         }
-        else if (g_power.isNothaltActive())
-        {
-            DBG_PRINTLN("[SBHF] RESET ignored (Nothalt still active)");
-        }
         else if (m_exitPowerOn)
         {
             DBG_PRINTLN("[SBHF] RESET ignored (exit power still on)");
@@ -455,9 +536,13 @@ void ShadowYardController::onResetAck()
     DBG_PRINTLN("[SBHF] RESET acknowledged");
 
     // Resume-Infos sichern, weil resetError() m_currentGleis löscht
-    const bool resume = m_resumePending && (m_resumeGleis >= 1 && m_resumeGleis <= 3);
+    bool resume = m_resumePending && (m_resumeGleis >= 1 && m_resumeGleis <= 3);
     const uint8_t gleis = m_resumeGleis;
     const SBhfState st = m_resumeState;
+
+    // Wenn im eingeschränkten Betrieb das Resume-Gleis nicht erlaubt ist: NICHT fortsetzen
+    if (resume && (m_allowedMask != 0) && ((m_allowedMask & (1 << (gleis - 1))) == 0))
+        resume = false;
 
     resetError();
 
@@ -480,3 +565,195 @@ void ShadowYardController::onResetAck()
     }
 }
 
+
+
+bool ShadowYardController::isCriticalWeiche(uint8_t weicheId) const
+{
+    return (weicheId == 12) || (weicheId == 13);
+}
+
+void ShadowYardController::setWarningForWeiche(uint8_t weicheId)
+{
+    switch (weicheId)
+    {
+        case 12: m_warningMask |= SBHF_WARN_W12_DEFECT; break;
+        case 13: m_warningMask |= SBHF_WARN_W13_DEFECT; break;
+        case 14: m_warningMask |= SBHF_WARN_W14_DEFECT; break;
+        case 15: m_warningMask |= SBHF_WARN_W15_DEFECT; break;
+        default: break;
+    }
+}
+
+bool ShadowYardController::startSelftest(bool includeNonCritical)
+{
+    if (m_selftestActive)
+        return false;
+
+    if (m_state != SBhfState::Error)
+        return false;
+
+    // Reset derived status; wird am Ende neu berechnet
+    m_allowedMask = 0x07;
+    m_warningMask = 0x00;
+
+    m_selftestActive = true;
+    m_selftestDone   = false;
+    m_selftestIncludeNonCritical = includeNonCritical;
+
+    m_selftestWeicheIdx = 0;
+    m_selftestStep = 0;
+    m_selftestStepStartMs = 0;
+
+    for (uint8_t i = 0; i < 4; i++)
+    {
+        m_stOk[i] = false;
+        m_stKnown[i] = false;
+        m_stPos[i] = 0;
+        m_stChk[i] = 0;
+    }
+
+    DBG_PRINTLN("[SBHF] Selftest started");
+    return true;
+}
+
+void ShadowYardController::selftestUpdate(uint32_t nowMs)
+{
+    static constexpr uint32_t SELFTEST_SETTLE_MS = 1200;
+
+    Weiche* const weichen[4] = { &w12, &w13, &w14, &w15 };
+    const uint8_t maxWeichen = m_selftestIncludeNonCritical ? 4 : 2;
+
+    if (m_selftestWeicheIdx >= maxWeichen)
+    {
+        selftestFinish();
+        return;
+    }
+
+    Weiche* w = weichen[m_selftestWeicheIdx];
+    const uint8_t idx = m_selftestWeicheIdx;
+
+    // Step 0: Gerade anfahren
+    if (m_selftestStep == 0)
+    {
+        w->setGerade();
+        m_selftestStepStartMs = nowMs;
+        m_selftestStep = 1;
+        return;
+    }
+
+    // Step 1: Gerade settle & prüfen, dann Abbiegen anfahren
+    if (m_selftestStep == 1)
+    {
+        if (nowMs - m_selftestStepStartMs < SELFTEST_SETTLE_MS)
+            return;
+
+        const bool rmAbbiegen = w->rueckmeldungAbbiegen();
+        if (!rmAbbiegen) m_stChk[idx] |= 0x01; // Gerade ok
+
+        w->setAbzweig();
+        m_selftestStepStartMs = nowMs;
+        m_selftestStep = 2;
+        return;
+    }
+
+    // Step 2: Abbiegen settle & prüfen, Ergebnis auswerten, nächste Weiche
+    if (m_selftestStep == 2)
+    {
+        if (nowMs - m_selftestStepStartMs < SELFTEST_SETTLE_MS)
+            return;
+
+        const bool rmAbbiegen = w->rueckmeldungAbbiegen();
+        if (rmAbbiegen) m_stChk[idx] |= 0x02; // Abbiegen ok
+
+        const bool ok = ((m_stChk[idx] & 0x03) == 0x03);
+        m_stOk[idx] = ok;
+
+        if (ok)
+        {
+            // Letzter Befehl war Abbiegen
+            m_stKnown[idx] = true;
+            m_stPos[idx]   = 1;
+        }
+        else
+        {
+            // Wir nehmen den aktuellen RM-Zustand als "bekannte" Stellung (stuck).
+            // (Wenn der RM-Sensor defekt ist, bleibt das dennoch konservativ durch allowedMask-Logik.)
+            m_stKnown[idx] = true;
+            m_stPos[idx]   = rmAbbiegen ? 1 : 0;
+        }
+
+        m_selftestWeicheIdx++;
+        m_selftestStep = 0;
+        m_selftestStepStartMs = nowMs;
+        return;
+    }
+}
+
+void ShadowYardController::selftestFinish()
+{
+    // Warnings für defekte Weichen setzen
+    if (!m_stOk[0]) m_warningMask |= SBHF_WARN_W12_DEFECT;
+    if (!m_stOk[1]) m_warningMask |= SBHF_WARN_W13_DEFECT;
+
+    if (m_selftestIncludeNonCritical)
+    {
+        if (!m_stOk[2]) m_warningMask |= SBHF_WARN_W14_DEFECT;
+        if (!m_stOk[3]) m_warningMask |= SBHF_WARN_W15_DEFECT;
+    }
+
+    // AllowedMask aus W12/W13 ableiten
+    m_allowedMask = 0x07;
+
+    const bool w12Ok = m_stOk[0];
+    const bool w13Ok = m_stOk[1];
+
+    const bool w12Known = m_stKnown[0];
+    const bool w13Known = m_stKnown[1];
+
+    const uint8_t w12Pos = m_stPos[0]; // 0=Gerade,1=Abbiegen
+    const uint8_t w13Pos = m_stPos[1];
+
+    if (!w12Ok && !w13Ok)
+    {
+        // Doppeldefekt
+        if (w12Known && w12Pos == 1)
+        {
+            m_allowedMask = 0x01; // nur Gleis 1 (W13 egal)
+        }
+        else if (w12Known && w12Pos == 0)
+        {
+            if (w13Known)
+                m_allowedMask = (w13Pos == 1) ? 0x02 : 0x04; // nur Gleis2 oder nur Gleis3
+            else
+                m_allowedMask = 0x00; // W12=Gerade aber W13 unknown => kein sicherer Pfad
+        }
+        else
+        {
+            m_allowedMask = 0x00; // W12 unknown => kein sicherer Pfad
+        }
+    }
+    else if (!w12Ok && w13Ok)
+    {
+        // Einzeldefekt W12
+        if (!w12Known)
+            m_allowedMask = 0x00;
+        else
+            m_allowedMask = (w12Pos == 1) ? 0x01 : 0x06; // W12=Abbiegen -> G1, W12=Gerade -> G2+G3
+    }
+    else if (w12Ok && !w13Ok)
+    {
+        // Einzeldefekt W13 (W12 OK => wir können Gleis1 immer anfahren)
+        if (!w13Known)
+            m_allowedMask = 0x01; // konservativ: nur Gleis 1
+        else
+            m_allowedMask = (w13Pos == 1) ? 0x03 : 0x05; // W13=Abbiegen -> G1+G2, W13=Gerade -> G1+G3
+    }
+
+    if (m_allowedMask != 0x07 && m_allowedMask != 0x00)
+        m_warningMask |= SBHF_WARN_RESTRICTED;
+
+    m_selftestActive = false;
+    m_selftestDone   = true;
+
+    DBG_PRINTF("[SBHF] Selftest done: allowedMask=0x%02X warnMask=0x%02X\n", m_allowedMask, m_warningMask);
+}

@@ -51,12 +51,68 @@ public:
     SBhfState state() const { return m_state; }
     uint8_t   ausfahrGleis() const { return m_currentGleis; }
 
+
+// --------------------------------------------------------
+// SBHF-Warnings / Restricted Mode
+// --------------------------------------------------------
+enum SbhfWarning : uint8_t
+{
+    SBHF_WARN_NONE           = 0x00,
+    SBHF_WARN_RESTRICTED     = 0x01, // Betrieb eingeschränkt (allowedMask != 0b111)
+
+    SBHF_WARN_W12_DEFECT     = 0x02,
+    SBHF_WARN_W13_DEFECT     = 0x04,
+    SBHF_WARN_W14_DEFECT     = 0x08,
+    SBHF_WARN_W15_DEFECT     = 0x10,
+};
+
+// Bit0..2 => Gleis1..3 erlaubt
+uint8_t allowedGleisMask() const { return m_allowedMask; }
+
+// SBHF-Warnmaske (bits siehe SbhfWarning)
+uint8_t warningMask() const { return m_warningMask; }
+
+// --------------------------------------------------------
+// Selbsttest (nach ACK bei SBHF-Weichenfehler)
+// --------------------------------------------------------
+// includeNonCritical=true => testet zusätzlich W14/W15 (Ergebnis erzeugt nur Warning)
+bool startSelftest(bool includeNonCritical = true);
+bool isSelftestActive() const { return m_selftestActive; }
+bool isSelftestDone()   const { return m_selftestDone; }
+void clearSelftestDone() { m_selftestDone = false; }
+
     // Gate für Sensor-Dispatch (S11..S16):
     // true => keine Sensor-Events in die SBhf-Logik einspeisen (SafetyLock / Error / Selftest)
     bool isSafetyBlocked() const;
 
     // Modus (vorbereitet für ESP)
     void setMode(SbhfMode m) { m_mode = m; }
+
+
+// ---------------- SBHF Restriction / Warning -------------
+uint8_t m_allowedMask = 0x07;   // default: Gleis 1..3 erlaubt
+uint8_t m_warningMask = 0x00;
+
+// ---------------- Selftest -------------------------------
+bool     m_selftestActive = false;
+bool     m_selftestDone   = false;
+bool     m_selftestIncludeNonCritical = true;
+
+uint8_t  m_selftestWeicheIdx = 0;   // 0..n-1
+uint8_t  m_selftestStep      = 0;   // 0=setGerade,1=wait,2=setAbzweig,3=wait,4=done
+uint32_t m_selftestStepStartMs = 0;
+
+// Ergebnisse pro Weiche (Index 0..3 => W12,W13,W14,W15)
+bool     m_stOk[4]    = {false, false, false, false};
+bool     m_stKnown[4] = {false, false, false, false};
+uint8_t  m_stPos[4]   = {0,0,0,0};  // 0=GERADE, 1=ABBIEGEN (wenn known)
+uint8_t  m_stChk[4]   = {0,0,0,0};  // bit0=Gerade ok, bit1=Abbiegen ok
+
+void selftestUpdate(uint32_t nowMs);
+void selftestFinish();
+
+void setWarningForWeiche(uint8_t weicheId);
+bool isCriticalWeiche(uint8_t weicheId) const;
 
     // --------------------------------------------------------
     // Weichen-Status für Proto (ersetzt g_weichen komplett)
@@ -79,7 +135,7 @@ private:
     void processWeichenSequence(uint32_t nowMs);
 
     // ---------------- Fehler / Reset -----------
-    void triggerHardError();
+    void triggerHardError(uint8_t weicheId);
     void resetError();
 
 private:

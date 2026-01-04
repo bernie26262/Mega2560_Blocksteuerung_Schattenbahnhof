@@ -64,5 +64,6 @@ bool Weiche::rueckmeldungAbbiegen() const
     if (!m_rueckmelder)
         return false;
 
-    return m_rueckmelder->isOccupied();
+    // raw() nutzt in SIM auch debugForce und ist in HW ohne extra update() aktuell
+    return m_rueckmelder->raw();
 }
