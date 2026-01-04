@@ -66,6 +66,8 @@ public:
     bool    weicheIst(uint8_t idx) const;
     bool    weicheSoll(uint8_t idx) const;
 
+    // Reset-Guard für Safety/ACK: nur wenn SBHF in Error ist, Nothalt aus und keine aktive Ausfahrt
+    bool canReset() const;
 private:
     // ---------------- Gleiswahl ----------------
     uint8_t pickNextGleis();
@@ -78,7 +80,6 @@ private:
 
     // ---------------- Fehler / Reset -----------
     void triggerHardError();
-    bool canReset() const;
     void resetError();
 
 private:

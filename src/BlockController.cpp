@@ -53,7 +53,120 @@ void BlockController::update(uint32_t nowMs)
         }
 #endif
     }
+    updateGrantBlock4(nowMs);
 }
+
+// ------------------------------------------------------------
+// Entry-Request/Grant – Block 4 Merge (Einfahrt aus Block 3 oder 6)
+// ------------------------------------------------------------
+static constexpr uint32_t ENTRY_REQ_TIMEOUT_MS = 1500;
+
+void BlockController::updateGrantBlock4(uint32_t nowMs)
+{
+    // Requests timeouten, wenn nicht periodisch erneuert
+    if (m_reqB4_from3_ms && (nowMs - m_reqB4_from3_ms) > ENTRY_REQ_TIMEOUT_MS) m_reqB4_from3_ms = 0;
+    if (m_reqB4_from6_ms && (nowMs - m_reqB4_from6_ms) > ENTRY_REQ_TIMEOUT_MS) m_reqB4_from6_ms = 0;
+
+    // Wenn Block 4 belegt ist, kein Grant (und Requests sind weiterhin ok, weil man blocked erkennen kann)
+    if (isOccupied(4))
+    {
+        m_grantTo4_from = 0;
+        return;
+    }
+
+    const bool req3 = (m_reqB4_from3_ms != 0);
+    const bool req6 = (m_reqB4_from6_ms != 0);
+
+    if (!req3 && !req6)
+    {
+        m_grantTo4_from = 0;
+        return;
+    }
+
+    // Zählregeln:
+    // - occ123: Anzahl belegter Blöcke 1..3
+    // - occUpper: Anzahl belegter Blöcke 5 + 6 + SBhf(7..9)
+    uint8_t occ123 = 0;
+    for (uint8_t b = 1; b <= 3 && b <= m_count; ++b)
+        if (isOccupied(b)) occ123++;
+
+    uint8_t occUpper = 0;
+    for (uint8_t b = 5; b <= 9 && b <= m_count; ++b)
+        if (isOccupied(b)) occUpper++;
+
+    // Regeln (wie besprochen):
+    // - From6->4 darf NUR wenn occ123 <= 2, und hat dann Vorfahrt vor From3->4.
+    // - From3->4 darf nur wenn occUpper <= 4.
+    // - Wenn occ123 > 2, wird From6->4 ohnehin nicht zugelassen => From3->4 hat dann (falls zulässig) Vorfahrt.
+    const bool ok6 = req6 && (occ123 <= 2);
+    const bool ok3 = req3 && (occUpper <= 4);
+
+    uint8_t grant = 0;
+
+    if (occ123 <= 2)
+    {
+        // Priority: From6->4
+        if (ok6)      grant = 6;
+        else if (ok3) grant = 3;
+    }
+    else
+    {
+        // Priority: From3->4
+        if (ok3)      grant = 3;
+        else if (ok6) grant = 6; // ok6 ist hier i.d.R. false, aber der Code bleibt robust
+    }
+
+    if (grant != m_grantTo4_from)
+    {
+        m_grantTo4_from = grant;
+        m_grantTo4_ms   = nowMs;
+    }
+}
+
+void BlockController::requestEnter(uint8_t fromBlock, uint8_t toBlock)
+{
+    const uint32_t now = millis();
+
+    if (toBlock == 4)
+    {
+        if (fromBlock == 3) m_reqB4_from3_ms = now;
+        if (fromBlock == 6) m_reqB4_from6_ms = now;
+        updateGrantBlock4(now);
+    }
+}
+
+void BlockController::cancelEnter(uint8_t fromBlock, uint8_t toBlock)
+{
+    if (toBlock == 4)
+    {
+        if (fromBlock == 3) m_reqB4_from3_ms = 0;
+        if (fromBlock == 6) m_reqB4_from6_ms = 0;
+        updateGrantBlock4(millis());
+    }
+}
+
+bool BlockController::entryGranted(uint8_t fromBlock, uint8_t toBlock) const
+{
+    if (toBlock == 4)
+        return (m_grantTo4_from != 0) && (m_grantTo4_from == fromBlock);
+
+    // Für alle anderen Blöcke derzeit keine Arbitration – "Grant" entspricht dem normalen canEnter().
+    return true;
+}
+
+bool BlockController::entryBlocked(uint8_t toBlock) const
+{
+    if (toBlock == 4)
+    {
+        // "blocked" == Block ist belegt UND es gibt einen gültigen Entry-Request
+        const uint32_t now = millis();
+        const bool req3 = m_reqB4_from3_ms && ((now - m_reqB4_from3_ms) <= ENTRY_REQ_TIMEOUT_MS);
+        const bool req6 = m_reqB4_from6_ms && ((now - m_reqB4_from6_ms) <= ENTRY_REQ_TIMEOUT_MS);
+        return isOccupied(4) && (req3 || req6);
+    }
+    return false;
+}
+
 
 uint16_t BlockController::stromFiltered(uint8_t id) const
 {
@@ -113,6 +226,13 @@ bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
 
     if (!idOk(toBlock, m_count))
         return false;
+
+    // Merge/Arbitration: für Block 4 nur wenn Grant für den 'fromBlock' aktiv ist
+    if (toBlock == 4)
+    {
+        if (!entryGranted(fromBlock, toBlock))
+            return false;
+    }
 
 #if MEGA2_DEBUG
     // Debug: wenn wir den Block künstlich steuern, nehmen wir unseren "frei"-Timestamp

@@ -201,8 +201,7 @@ bool safetyResetEmergency()
         const uint16_t i = g_bc.stromFiltered(b);
         if (i > NO_CURRENT_MA)
         {
-            DBG_PRINTF("[SAFETY] ACK blocked (SHORT): B%d current=%umA
-", b, i);
+            DBG_PRINTF("[SAFETY] ACK blocked (SHORT): B%d current=%umA\n", b, i);
             return false;
         }
 
@@ -284,8 +283,7 @@ bool safetyResetEmergency()
 
         if (b && i > NO_CURRENT_MA)
         {
-            DBG_PRINTF("[SAFETY] ACK blocked (DOUBLE_OCC): B%d current=%umA
-", b, i);
+            DBG_PRINTF("[SAFETY] ACK blocked (DOUBLE_OCC): B%d current=%umA\n", b, i);
             return false;
         }
 
@@ -462,9 +460,9 @@ void safetyUpdate()
             for (uint8_t b = 1; b <= g_bc.count() && b < 16; b++)
             {
                 const uint16_t i = g_bc.stromFiltered(b);
-                const bool blocked = g_bc.isOccupied(b); // entryBlocked(x)
+                const bool blocked = g_bc.entryBlocked(b);
 
-                if (blocked && i >= DOUBLE_OCC_THRESHOLD_MA)
+                if (blocked && i >= DOUBLE_OCC_THRESHOLD_MA && i < SHORT_THRESHOLD_MA)
                 {
                     if (s_doubleOccStartMs[b] == 0) s_doubleOccStartMs[b] = now;
                     if ((now - s_doubleOccStartMs[b]) >= DOUBLE_OCC_DETECT_MS)
@@ -472,8 +470,7 @@ void safetyUpdate()
                         safetyErrorSet(SAFETY_ERR_DOUBLE_OCCUPANCY, b);
                         safetySetEmergency(true);
 
-                        DBG_PRINTF("[SAFETY] EMERG_DOUBLE_OCCUPANCY(B%d) -> ALL OFF, LOCK
-", b);
+                        DBG_PRINTF("[SAFETY] EMERG_DOUBLE_OCCUPANCY(B%d) -> ALL OFF, LOCK\n", b);
                         return;
                     }
                 }
