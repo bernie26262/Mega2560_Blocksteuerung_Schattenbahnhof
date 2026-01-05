@@ -21,7 +21,8 @@ enum : uint8_t
     // --- Status Abfragen (read-only) ---
     M2_CMD_GET_SAFETY_STATUS  = 0x20, // -> Mega2SafetyStatus
     M2_CMD_GET_BLOCK_STATUS   = 0x21, // -> BlockStatus[M2_NUM_BLOCKS]
-    M2_CMD_GET_SHADOW_STATUS  = 0x22  // -> ShadowYardStatus
+    M2_CMD_GET_SHADOW_STATUS  = 0x22, // -> ShadowYardStatus
+    M2_CMD_GET_ENTRY_MATRIX  = 0x23  // -> uint16_t[M2_NUM_BLOCKS] (FROM->TO)
 };
 
 // =====================================================
@@ -102,5 +103,7 @@ enum Mega2Command : uint8_t {
     CMD_GET_M2_SAFETY = 0x20,
     CMD_GET_M2_BLOCKS = 0x21,
     CMD_GET_M2_SBH    = 0x22,
+    CMD_GET_M2_ENTRY  = 0x23,
+    CMD_GET_M2_ENTRY_PREVIEW = 0x24,
 };
 

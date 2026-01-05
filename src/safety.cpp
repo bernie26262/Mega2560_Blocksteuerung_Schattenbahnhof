@@ -11,6 +11,8 @@
 #include "safety_error.h"
 #include "mega2_debug.h"
 
+#include "proto_mega2.h"
+
 // ============================================================================
 // Externe Abhängigkeiten (aus main.cpp)
 // ============================================================================
@@ -56,7 +58,7 @@ static uint32_t          s_lastSsrBOffMs   = 0;
 
 static uint32_t          s_lastPowerSwitchMs = 0;
 static uint32_t          s_lastSafetyUpdateMs = 0;
-static uint32_t          s_doubleOccStartMs[16] = {0};
+static uint32_t          s_doubleOccStartMs[MEGA2_MAX_BLOCKS] = {0};
 
 // SBHF Weichenfehler: ACK -> Selftest (ShadowYardController)
 static bool              s_sbhfSelftestPending = false;
@@ -465,11 +467,11 @@ void safetyUpdate()
         const bool powerStable = (now - s_lastPowerSwitchMs) >= POWER_STABLE_MS;
         if (!powerStable)
         {
-            for (uint8_t b = 0; b < 16; b++) s_doubleOccStartMs[b] = 0;
+            for (uint8_t b = 0; b < MEGA2_MAX_BLOCKS; b++) s_doubleOccStartMs[b] = 0;
         }
         else
         {
-            for (uint8_t b = 1; b <= g_bc.count() && b < 16; b++)
+            for (uint8_t b = 1; b <= g_bc.count() && b < MEGA2_MAX_BLOCKS; b++)
             {
                 const uint16_t i = g_bc.stromFiltered(b);
                 const bool blocked = g_bc.entryBlocked(b);

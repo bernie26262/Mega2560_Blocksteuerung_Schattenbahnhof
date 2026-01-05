@@ -12,7 +12,7 @@ void mega2_buildPayload(Mega2Payload& p)
     // ----------------------------------
     // BLOCKS (nur über Controller-Status)
     // ----------------------------------
-    for (uint8_t i = 0; i < MEGA2_MAX_BLOCKS; i++)
+    for (uint8_t i = 0; i < MEGA2_NUM_BLOCKS; i++)
     {
         p.blockOccupied[i]   = g_bc.isOccupied(i);
         p.blockStroeme_mA[i] = g_bc.stromFiltered(i);

@@ -25,6 +25,27 @@ extern SystemStatus g_systemStatus;
 // ------------------------------------------------------------
 // Interner Command-Response-Zustand
 // ------------------------------------------------------------
+
+// ------------------------------------------------------------
+// Helper: Nachbarschaft (deine Topologie)
+// 1->2, 2->3, 3->4, 4->1, 4->5, 5->7/8/9, 7/8/9->6, 6->4
+// ------------------------------------------------------------
+static bool isNeighbor(uint8_t fromBlock, uint8_t toBlock)
+{
+    if (fromBlock == 1 && toBlock == 2) return true;
+    if (fromBlock == 2 && toBlock == 3) return true;
+    if (fromBlock == 3 && toBlock == 4) return true;
+    if (fromBlock == 4 && toBlock == 1) return true;
+    if (fromBlock == 4 && toBlock == 5) return true;
+
+    if (fromBlock == 5 && (toBlock == 7 || toBlock == 8 || toBlock == 9)) return true;
+    if ((fromBlock == 7 || fromBlock == 8 || fromBlock == 9) && toBlock == 6) return true;
+
+    if (fromBlock == 6 && toBlock == 4) return true;
+
+    return false;
+}
+
 static bool    s_cmdResponsePending = false;
 static uint8_t s_cmdResponseOk      = 0;
 static uint8_t s_pendingResponse    = 0;
@@ -196,7 +217,64 @@ void i2cOnRequest()
             break;
         }
 
-        default:
+        
+case CMD_GET_M2_ENTRY:
+{
+    // Antwort: uint16_t[M2_NUM_BLOCKS] (FROM->TO bitmask)
+    // Index: from-1; Bit(to-1)=1 => Einfahrt erlaubt
+    uint16_t entry[M2_NUM_BLOCKS]{};
+    for (uint8_t from = 1; from <= M2_NUM_BLOCKS; from++)
+    {
+        uint16_t mask = 0;
+        for (uint8_t to = 1; to <= M2_NUM_BLOCKS; to++)
+        {
+            if (!isNeighbor(from, to))
+                continue;
+
+            if (blockController.canEnter(from, to))
+                mask |= (1u << (to - 1));
+        }
+        entry[from - 1] = mask;
+    }
+
+    Wire.write(reinterpret_cast<uint8_t*>(entry), sizeof(entry));
+    break;
+}
+
+case CMD_GET_M2_ENTRY_PREVIEW:
+{
+    // Antwort: uint16_t[M2_NUM_BLOCKS] (FROM->TO bitmask)
+    // Semantik: "prinzipiell möglich" (Preview) – Topologie + Ziel frei + keine globale Safety-Sperre
+    uint16_t entry[M2_NUM_BLOCKS]{};
+
+    // Globaler Lock -> alles rot
+    if (safetyIsLocked())
+    {
+        Wire.write(reinterpret_cast<uint8_t*>(entry), sizeof(entry));
+        break;
+    }
+
+    for (uint8_t from = 1; from <= M2_NUM_BLOCKS; from++)
+    {
+        uint16_t mask = 0;
+        for (uint8_t to = 1; to <= M2_NUM_BLOCKS; to++)
+        {
+            if (!isNeighbor(from, to))
+                continue;
+
+            // Preview ignoriert Speziallogik wie entryGranted() (z.B. Block4 Merge)
+            // und fragt nur: "Zielblock frei?"
+            if (!blockController.isOccupied(to))
+                mask |= (1u << (to - 1));
+        }
+        entry[from - 1] = mask;
+    }
+
+    Wire.write(reinterpret_cast<uint8_t*>(entry), sizeof(entry));
+    break;
+}
+
+default:
             // unbekannt → nichts senden
             break;
     }

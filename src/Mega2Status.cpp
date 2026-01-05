@@ -4,6 +4,7 @@
 
 #include "BlockController.h"
 #include "ShadowYardController.h"
+#include "Weiche.h"
 #include "safety.h"
 #include "safety_error.h"
 
@@ -11,6 +12,12 @@
 extern BlockController      g_bc;
 extern ShadowYardController g_sbhf;
 
+
+// Weichen aus main.cpp
+extern Weiche w12;
+extern Weiche w13;
+extern Weiche w14;
+extern Weiche w15;
 // g_bootId: weak definition, damit der Linker auch dann zufrieden ist,
 // wenn (noch) keine andere starke Definition existiert.
 // Falls du irgendwann woanders eine starke Definition anlegst, gewinnt diese automatisch.
@@ -60,7 +67,30 @@ void buildMega2ShadowStatus(ShadowYardStatus& out,
 }
 
 // --------------------------------------------------
-// SYSTEM STATUS (neu)
+// Helper: Turnout masks (Bit0=W12..Bit3=W15)
+// --------------------------------------------------
+static uint16_t buildTurnoutSollMask()
+{
+    uint16_t m = 0;
+    if (w12.getStellung() == Weiche::ABBIEGEN) m |= (1u << 0);
+    if (w13.getStellung() == Weiche::ABBIEGEN) m |= (1u << 1);
+    if (w14.getStellung() == Weiche::ABBIEGEN) m |= (1u << 2);
+    if (w15.getStellung() == Weiche::ABBIEGEN) m |= (1u << 3);
+    return m;
+}
+
+static uint16_t buildTurnoutIstMask()
+{
+    uint16_t m = 0;
+    if (w12.rueckmeldungAbbiegen()) m |= (1u << 0);
+    if (w13.rueckmeldungAbbiegen()) m |= (1u << 1);
+    if (w14.rueckmeldungAbbiegen()) m |= (1u << 2);
+    if (w15.rueckmeldungAbbiegen()) m |= (1u << 3);
+    return m;
+}
+
+// --------------------------------------------------
+// SYSTEM STATUS (v3, kompakt)
 // --------------------------------------------------
 void buildMega2SystemStatus(SystemStatus& out)
 {
@@ -109,6 +139,14 @@ void buildMega2SystemStatus(SystemStatus& out)
     for (uint8_t i = 0; i < 3; i++)
         if (g_bc.isOccupied(7 + i))
             out.sbhfOccupiedMask |= (1 << i);
+
+// aktuelles (ausgewähltes) Gleis 1..3 (0 = none)
+out.sbhfCurrentGleis = g_sbhf.ausfahrGleis();
+
+// Weichen Soll/Ist
+out.turnoutSollMask = buildTurnoutSollMask();
+out.turnoutIstMask  = buildTurnoutIstMask();
+
 
     // SBHF warnings/allowed mask -> reserved (Variant A)
     const uint8_t allowedMask = g_sbhf.allowedGleisMask();

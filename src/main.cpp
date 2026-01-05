@@ -46,7 +46,7 @@ uint16_t g_bootId = 0;
 // IDs sind 1-basiert (Index 0 bleibt nullptr)
 static constexpr uint8_t BLOCK_COUNT = 9;
 
-Block* g_blocks[16];                 // Reserve, aber count() = 9
+Block* g_blocks[MEGA2_MAX_BLOCKS];                 // Reserve, aber count() = 9
 BlockController g_bc(g_blocks, BLOCK_COUNT);
 BlockController& blockController = g_bc;
 
