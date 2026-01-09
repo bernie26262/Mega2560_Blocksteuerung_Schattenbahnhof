@@ -487,7 +487,10 @@ void ShadowYardController::triggerHardError(uint8_t weicheId)
 
 bool ShadowYardController::canReset() const
 {
-    if (m_state != SBhfState::Error)
+    // Normally selftest is started as part of the SBHF emergency/ACK flow
+    // while we are in Error state. For an explicit UI "Retry" we also allow
+    // running the selftest while we're in WARNING-only mode.
+    if (m_state != SBhfState::Error && m_warningMask == 0)
         return false;
 
     // Kein Reset während Selftest läuft

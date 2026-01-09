@@ -2,6 +2,9 @@
 #include <stdint.h>
 #include "proto_mega2.h"
 
+// Wire-format version.
+// IMPORTANT: Mega1 and Mega2 must share the same version/size.
+// Selftest runtime information is encoded in sbhfOccupiedMask META bits (see Mega2Status.cpp).
 static constexpr uint8_t SYSTEM_STATUS_VERSION = 3;
 
 enum SystemNodeId : uint8_t
@@ -21,7 +24,7 @@ enum SystemStatusFlags : uint16_t
     SYS_WARNING_PRESENT  = 1 << 4,
 };
 
-// v3 (kompakt, <=32 Bytes) — PACKED für stabile I2C-Übertragung
+// v3 (kompakt) — PACKED für stabile I2C-Übertragung
 struct __attribute__((packed)) SystemStatus
 {
     uint8_t  version;

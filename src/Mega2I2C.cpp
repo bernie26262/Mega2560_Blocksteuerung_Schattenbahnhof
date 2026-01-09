@@ -50,6 +50,9 @@ static bool    s_cmdResponsePending = false;
 static uint8_t s_cmdResponseOk      = 0;
 static uint8_t s_pendingResponse    = 0;
 
+// Selftest-Retry darf NICHT im I2C-Callback gestartet werden (kann onRequest verhungern lassen)
+static volatile bool s_pendingSelftestRetry = false;
+
 // ------------------------------------------------------------
 // I2C Receive (Master → Slave)
 // ------------------------------------------------------------
@@ -91,6 +94,19 @@ void i2cOnReceive(int len)
         bool ok = safetyResetEmergency();
 
         s_cmdResponseOk      = ok ? 1 : 0;
+        s_cmdResponsePending = true;
+        return;
+    }
+
+    // --------------------------------------------------
+    // SBHF: Selftest retry (UI-triggered)
+    // --------------------------------------------------
+    if (cmd == M2_CMD_SBH_SELFTEST_RETRY)
+    {
+        // WICHTIG: NICHT hier startSelftest() aufrufen (I2C onReceive ist timingkritisch).
+        // Wir quittieren sofort und starten den Selftest später im loop-Kontext.
+        s_pendingSelftestRetry = true;
+        s_cmdResponseOk      = 1;
         s_cmdResponsePending = true;
         return;
     }
@@ -178,13 +194,17 @@ void i2cOnRequest()
 
     // --------------------------------------------------
     // Default: SystemStatus (read-only)
+    // IMPORTANT:
+    // Do NOT rely on a periodically refreshed global struct here.
+    // If the main loop fails to update g_systemStatus (or it is still zeroed
+    // during boot), ESP will see ver/size/node as 0 and mark Mega2 offline.
+    // Build the status on-demand to guarantee a valid v3/26B header.
     // --------------------------------------------------
     if (s_pendingResponse == 0)
     {
-        Wire.write(
-            reinterpret_cast<uint8_t*>(&g_systemStatus),
-            sizeof(SystemStatus)
-        );
+        SystemStatus st{};
+        buildMega2SystemStatus(st);
+        Wire.write(reinterpret_cast<uint8_t*>(&st), sizeof(st));
         return;
     }
 
@@ -274,8 +294,13 @@ case CMD_GET_M2_ENTRY_PREVIEW:
     break;
 }
 
-default:
-            // unbekannt → nichts senden
+        default:
+            // unbekannt → als Fallback SystemStatus senden (verhindert 0-Reads)
+            {
+                SystemStatus st{};
+                buildMega2SystemStatus(st);
+                Wire.write(reinterpret_cast<uint8_t*>(&st), sizeof(st));
+            }
             break;
     }
 
@@ -297,5 +322,11 @@ void megaI2C_begin()
 // ------------------------------------------------------------
 void megaI2C_update()
 {
-    // Platzhalter für spätere Erweiterungen
+    // Selftest-Retry aus UI asynchron starten
+    if (s_pendingSelftestRetry)
+    {
+        s_pendingSelftestRetry = false;
+        (void)shadowController.startSelftest(true);
+    }
 }
+

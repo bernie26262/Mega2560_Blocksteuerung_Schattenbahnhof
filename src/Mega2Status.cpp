@@ -12,12 +12,12 @@
 extern BlockController      g_bc;
 extern ShadowYardController g_sbhf;
 
-
 // Weichen aus main.cpp
 extern Weiche w12;
 extern Weiche w13;
 extern Weiche w14;
 extern Weiche w15;
+
 // g_bootId: weak definition, damit der Linker auch dann zufrieden ist,
 // wenn (noch) keine andere starke Definition existiert.
 // Falls du irgendwann woanders eine starke Definition anlegst, gewinnt diese automatisch.
@@ -90,7 +90,7 @@ static uint16_t buildTurnoutIstMask()
 }
 
 // --------------------------------------------------
-// SYSTEM STATUS (v3, kompakt)
+// SYSTEM STATUS (v4, kompakt)
 // --------------------------------------------------
 void buildMega2SystemStatus(SystemStatus& out)
 {
@@ -116,7 +116,7 @@ void buildMega2SystemStatus(SystemStatus& out)
         out.flags |= SYS_POWER_ON;
 
     // -----------------------------
-    // SAFETY ERROR DETAILS (NEU)
+    // SAFETY ERROR DETAILS
     // -----------------------------
     const SafetyErrorInfo& err = safetyErrorGet();
     out.safetyErrorType  = static_cast<uint8_t>(err.type);
@@ -140,13 +140,17 @@ void buildMega2SystemStatus(SystemStatus& out)
         if (g_bc.isOccupied(7 + i))
             out.sbhfOccupiedMask |= (1 << i);
 
-// aktuelles (ausgewähltes) Gleis 1..3 (0 = none)
-out.sbhfCurrentGleis = g_sbhf.ausfahrGleis();
+    // META bits (without protocol bump):
+    // 0x80 = SBHF selftest currently running.
+    if (g_sbhf.isSelftestActive())
+        out.sbhfOccupiedMask |= 0x80;
 
-// Weichen Soll/Ist
-out.turnoutSollMask = buildTurnoutSollMask();
-out.turnoutIstMask  = buildTurnoutIstMask();
+    // aktuelles (ausgewähltes) Gleis 1..3 (0 = none)
+    out.sbhfCurrentGleis = g_sbhf.ausfahrGleis();
 
+    // Weichen Soll/Ist
+    out.turnoutSollMask = buildTurnoutSollMask();
+    out.turnoutIstMask  = buildTurnoutIstMask();
 
     // SBHF warnings/allowed mask -> reserved (Variant A)
     const uint8_t allowedMask = g_sbhf.allowedGleisMask();
@@ -156,5 +160,6 @@ out.turnoutIstMask  = buildTurnoutIstMask();
         out.flags |= SYS_WARNING_PRESENT;
 
     out.reserved = (static_cast<uint16_t>(allowedMask) << 8) | warningMask;
-}
 
+    // v3: no dedicated sbhfFlags field.
+}

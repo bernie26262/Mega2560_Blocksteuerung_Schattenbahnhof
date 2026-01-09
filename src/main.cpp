@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <string.h>
 
 #include "mega2_pins.h"
 
@@ -404,6 +405,17 @@ void setup()
 
     g_s11.begin(); g_s12.begin(); g_s13.begin();
     g_s14.begin(); g_s15.begin(); g_s16.begin();
+
+    // --------------------------------------------------------------------
+    // IMPORTANT: ESP polls SystemStatus immediately after boot.
+    // If we enable I2C before building g_systemStatus at least once,
+    // the first read can return uninitialized bytes. The ESP then rejects
+    // the packet (e.g. ver=2/size=4/node=0) and marks Mega2 offline.
+    //
+    // Therefore: build a valid status once BEFORE megaI2C_begin().
+    // --------------------------------------------------------------------
+    memset(&g_systemStatus, 0, sizeof(g_systemStatus));
+    buildMega2SystemStatus(g_systemStatus);
 
     megaI2C_begin();
 }

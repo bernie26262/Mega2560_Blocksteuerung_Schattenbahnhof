@@ -192,7 +192,18 @@ bool safetyPowerOn()
 
 bool safetyResetEmergency()
 {
-    if (!s_lock) return true;
+    // Wenn nicht gelockt: optionaler manueller Selftest-Retry (z.B. nach Fix im eingeschränkten Betrieb)
+    if (!s_lock)
+    {
+        if (!shadowController.isSelftestActive())
+        {
+            if (shadowController.startSelftest(true /*include W14/W15*/))
+            {
+                DBG_PRINTLN("[SAFETY] Selftest retry started (unlocked)");
+            }
+        }
+        return true;
+    }
 
     const SafetyErrorInfo& err = safetyErrorGet();
 
