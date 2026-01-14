@@ -38,6 +38,13 @@ static constexpr uint16_t NO_CURRENT_MA        = 100;
 static constexpr uint16_t DOUBLE_OCC_THRESHOLD_MA = 1200; // TODO: kalibrieren
 static constexpr uint32_t DOUBLE_OCC_DETECT_MS    = 600;
 static constexpr uint32_t POWER_STABLE_MS         = 400;  // nach SSR-Schaltvorgängen keine Fehltrigger
+// Adaptive Double-Occ (zusätzlich zum Hard-Trigger)
+static constexpr uint32_t DOUBLE_OCC_TAU_MS        = 2000;  // ~2s EMA
+static constexpr uint16_t DOUBLE_OCC_FACTOR_NUM    = 3;     // 1.5x
+static constexpr uint16_t DOUBLE_OCC_FACTOR_DEN    = 2;
+static constexpr uint16_t DOUBLE_OCC_DELTA_MIN_MA  = 120;   // absoluter Sprung
+static constexpr uint16_t DOUBLE_OCC_BASE_MIN_MA   = 80;    // optional: Basis muss "echt" sein
+
 
 // Safety-Controller Fault (Watchdog / Invariants)
 static constexpr uint32_t SAFETY_TICK_MAX_GAP_MS  = 1000;
@@ -59,6 +66,13 @@ static uint32_t          s_lastSsrBOffMs   = 0;
 static uint32_t          s_lastPowerSwitchMs = 0;
 static uint32_t          s_lastSafetyUpdateMs = 0;
 static uint32_t          s_doubleOccStartMs[MEGA2_MAX_BLOCKS] = {0};
+
+// Adaptive double occupancy: EMA baseline (mA) per block
+static uint16_t s_doubleOccBaseMa[MEGA2_MAX_BLOCKS]    = {0};
+static uint32_t s_doubleOccBaseLastMs[MEGA2_MAX_BLOCKS]= {0};
+
+// SIM/Debug: forced block current (mA). 0 => disabled.
+static uint16_t          s_forceBlockCurrentMa[MEGA2_MAX_BLOCKS] = {0};
 
 // SBHF Weichenfehler: ACK -> Selftest (ShadowYardController)
 static bool              s_sbhfSelftestPending = false;
@@ -146,9 +160,48 @@ uint8_t safetyGetBlockReason() { return static_cast<uint8_t>(s_blockReason); }
 // Debug (SIM)
 #if MEGA2_SIM_MODE
 void safetyDebugForceTrafoUntenPowered(bool on) { s_forceTrafoUntenPowered = on; }
+bool safetyDebugIsTrafoUntenForced() { return s_forceTrafoUntenPowered; }
 #else
 void safetyDebugForceTrafoUntenPowered(bool) {}
+bool safetyDebugIsTrafoUntenForced() { return false; }
 #endif
+
+// ------------------------------------------------------------
+// SIM/Debug: force synthetic block current (mA)
+// ------------------------------------------------------------
+void safetyDebugForceBlockCurrentMa(uint8_t block, uint16_t ma)
+{
+    if (block >= MEGA2_MAX_BLOCKS) return;
+    s_forceBlockCurrentMa[block] = ma;
+}
+
+uint16_t safetyDebugGetForcedBlockCurrentMa(uint8_t block)
+{
+    if (block >= MEGA2_MAX_BLOCKS) return 0;
+    return s_forceBlockCurrentMa[block];
+}
+
+static inline uint16_t safetyBlockCurrentMa(uint8_t block)
+{
+    const uint16_t forced = (block < MEGA2_MAX_BLOCKS) ? s_forceBlockCurrentMa[block] : 0;
+    if (forced) return forced;
+    return g_bc.stromFiltered(block);
+}
+
+
+static inline uint16_t emaUpdateMa(uint16_t base, uint16_t sample, uint32_t dtMs, uint32_t tauMs)
+{
+    if (dtMs == 0 || tauMs == 0) return base;
+    const uint32_t alphaNum = dtMs;
+    const uint32_t alphaDen = tauMs + dtMs;
+    const int32_t diff = (int32_t)sample - (int32_t)base;
+    const int32_t delta = (int32_t)(((int64_t)diff * alphaNum) / alphaDen);
+    int32_t out = (int32_t)base + delta;
+    if (out < 0) out = 0;
+    if (out > 65535) out = 65535;
+    return (uint16_t)out;
+}
+
 
 void safetySetEmergency(bool on)
 {
@@ -213,7 +266,7 @@ bool safetyResetEmergency()
     if (err.type == SAFETY_ERR_BLOCK_SHORT)
     {
         const uint8_t b = (err.index >= 1 && err.index <= g_bc.count()) ? err.index : 6;
-        const uint16_t i = g_bc.stromFiltered(b);
+        const uint16_t i = safetyBlockCurrentMa(b);
         if (i > NO_CURRENT_MA)
         {
             DBG_PRINTF("[SAFETY] ACK blocked (SHORT): B%d current=%umA\n", b, i);
@@ -296,7 +349,7 @@ bool safetyResetEmergency()
     if (err.type == SAFETY_ERR_DOUBLE_OCCUPANCY)
     {
         const uint8_t b = (err.index >= 1 && err.index <= g_bc.count()) ? err.index : 0;
-        const uint16_t i = (b ? g_bc.stromFiltered(b) : 0);
+        const uint16_t i = (b ? safetyBlockCurrentMa(b) : 0);
 
         if (b && i > NO_CURRENT_MA)
         {
@@ -443,7 +496,7 @@ void safetyUpdate()
         const bool trafoUntenPowered = isTrafoUntenPowered();
         const bool nothaltKontaktOcc = k_nothalt.raw();
 
-        const uint16_t i6            = g_bc.stromFiltered(6);
+        const uint16_t i6            = safetyBlockCurrentMa(6);
         const bool block6NoCurrent   = (i6 <= NO_CURRENT_MA);
 
         if (stopzoneActive && trafoUntenPowered && nothaltKontaktOcc && block6NoCurrent)
@@ -468,7 +521,7 @@ void safetyUpdate()
     // ------------------------------------------------------------
     // Doppelte Blockbelegung (heuristisch via Strom-Anstieg)
     // Trigger wenn:
-    // - Block x ist bereits belegt (entryBlocked)
+    // - Block x ist bereits belegt (isOccupied)
     // - Strom >= DOUBLE_OCC_THRESHOLD_MA
     // - Keine SSR-Schaltaktion in den letzten POWER_STABLE_MS
     // - für DOUBLE_OCC_DETECT_MS stabil
@@ -478,16 +531,60 @@ void safetyUpdate()
         const bool powerStable = (now - s_lastPowerSwitchMs) >= POWER_STABLE_MS;
         if (!powerStable)
         {
-            for (uint8_t b = 0; b < MEGA2_MAX_BLOCKS; b++) s_doubleOccStartMs[b] = 0;
+            for (uint8_t b = 0; b < MEGA2_MAX_BLOCKS; b++)
+            {
+                s_doubleOccStartMs[b] = 0;
+                s_doubleOccBaseMa[b] = 0;
+                s_doubleOccBaseLastMs[b] = 0;
+            }
         }
         else
         {
             for (uint8_t b = 1; b <= g_bc.count() && b < MEGA2_MAX_BLOCKS; b++)
             {
-                const uint16_t i = g_bc.stromFiltered(b);
-                const bool blocked = g_bc.entryBlocked(b);
+                const uint16_t iNow = safetyBlockCurrentMa(b);
+                const bool occupied = g_bc.isOccupied(b);
 
-                if (blocked && i >= DOUBLE_OCC_THRESHOLD_MA && i < SHORT_THRESHOLD_MA)
+                // --- Update EMA baseline only when occupied ---
+                if (occupied)
+                {
+                    const uint32_t last = s_doubleOccBaseLastMs[b];
+                    const uint32_t dt   = (last == 0) ? 0 : (now - last);
+                    s_doubleOccBaseLastMs[b] = now;
+
+                    if (s_doubleOccBaseMa[b] == 0)
+                    {
+                        s_doubleOccBaseMa[b] = iNow; // init
+                    }
+                    else if (dt > 0 && dt < 5000)
+                    {
+                        s_doubleOccBaseMa[b] = emaUpdateMa(s_doubleOccBaseMa[b], iNow, dt, DOUBLE_OCC_TAU_MS);
+                    }
+                }
+                else
+                {
+                    s_doubleOccBaseMa[b] = 0;
+                    s_doubleOccBaseLastMs[b] = 0;
+                }
+
+                // --- compute adaptive threshold ---
+                const uint16_t iBase = s_doubleOccBaseMa[b];
+                const uint16_t thrRel = (uint16_t)((uint32_t)iBase * DOUBLE_OCC_FACTOR_NUM / DOUBLE_OCC_FACTOR_DEN);
+                const uint16_t thrAbs = (uint16_t)(iBase + DOUBLE_OCC_DELTA_MIN_MA);
+                const uint16_t thrAdaptive = (thrRel > thrAbs) ? thrRel : thrAbs;
+
+                // --- candidate condition: Hard OR Adaptive ---
+                const bool inRangeForDoubleOcc = (iNow < SHORT_THRESHOLD_MA);
+
+                const bool hardTrip = (iNow >= DOUBLE_OCC_THRESHOLD_MA);
+                const bool adaptiveTrip = (iBase >= DOUBLE_OCC_BASE_MIN_MA) && (iNow >= thrAdaptive);
+
+                const bool doubleOccCandidate =
+                    occupied &&
+                    inRangeForDoubleOcc &&
+                    (hardTrip || adaptiveTrip);
+
+                if (doubleOccCandidate)
                 {
                     if (s_doubleOccStartMs[b] == 0) s_doubleOccStartMs[b] = now;
                     if ((now - s_doubleOccStartMs[b]) >= DOUBLE_OCC_DETECT_MS)
@@ -495,14 +592,16 @@ void safetyUpdate()
                         safetyErrorSet(SAFETY_ERR_DOUBLE_OCCUPANCY, b);
                         safetySetEmergency(true);
 
-                        DBG_PRINTF("[SAFETY] EMERG_DOUBLE_OCCUPANCY(B%d) -> ALL OFF, LOCK\n", b);
-                        return;
+                        DBG_PRINTF("[SAFETY] EMERG_DOUBLE_OCCUPANCY(B%d) iNow=%umA iBase=%umA thr=%umA -> ALL OFF, LOCK\n",
+                                b, iNow, iBase, (hardTrip ? DOUBLE_OCC_THRESHOLD_MA : thrAdaptive));
+                                return;
                     }
                 }
                 else
                 {
                     s_doubleOccStartMs[b] = 0;
                 }
+
             }
         }
     }
@@ -514,7 +613,7 @@ void safetyUpdate()
     {
         static uint32_t overSinceMs = 0;
 
-        const uint16_t i6 = g_bc.stromFiltered(6);
+        const uint16_t i6 = safetyBlockCurrentMa(6);
         const bool over = (i6 >= SHORT_THRESHOLD_MA);
 
         if (over)

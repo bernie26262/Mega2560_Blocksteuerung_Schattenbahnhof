@@ -10,6 +10,7 @@
 #include "Mega2Status.h"
 #include "system/status_system.h"
 #include "safety.h"
+#include "mega2_debug.h"
 
 // ------------------------------------------------------------
 // Externe Controller aus main.cpp
@@ -326,7 +327,10 @@ void megaI2C_update()
     if (s_pendingSelftestRetry)
     {
         s_pendingSelftestRetry = false;
-        (void)shadowController.startSelftest(true);
+
+        const bool started = shadowController.startSelftest(true);
+        if (started) DBG_PRINTLN("[I2C] SBHF selftest retry started");
+        else         DBG_PRINTLN("[I2C] SBHF selftest retry rejected (state/conditions)");
     }
 }
 

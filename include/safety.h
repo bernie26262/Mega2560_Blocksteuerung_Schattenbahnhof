@@ -41,5 +41,13 @@ uint8_t safetyGetBlockReason();
 void safetyDebugForceTrafoUntenPowered(bool on);
 bool safetyDebugIsTrafoUntenForced();
 
+// ------------------------------------------------------------
+// SIM/Debug: Force synthetic block current (mA) for safety tests.
+// ma==0 disables forcing for that block.
+// Only meaningful/active in MEGA2_SIM_MODE builds.
+// ------------------------------------------------------------
+void safetyDebugForceBlockCurrentMa(uint8_t block, uint16_t ma);
+uint16_t safetyDebugGetForcedBlockCurrentMa(uint8_t block);
+
 // Debug/Test: Kurzschluss in Block manuell triggern
 void safetyTriggerBlockShort(uint8_t block);

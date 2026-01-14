@@ -592,8 +592,18 @@ bool ShadowYardController::startSelftest(bool includeNonCritical)
     if (m_selftestActive)
         return false;
 
+    // Selftest darf starten:
+    // - nach Hard-Error (klassischer Flow)
+    // - oder im Idle, wenn es Warnings/Restriktionen gibt (UI Retry im eingeschränkten Betrieb)
     if (m_state != SBhfState::Error)
-        return false;
+    {
+        if (m_state != SBhfState::Idle)
+            return false;
+
+        // Im Idle nur sinnvoll, wenn wirklich Warnungen/Restriktionen vorliegen
+        if (m_warningMask == 0 && m_allowedMask == 0x07)
+            return false;
+    }
 
     // Reset derived status; wird am Ende neu berechnet
     m_allowedMask = 0x07;

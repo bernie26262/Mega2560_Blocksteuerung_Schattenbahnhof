@@ -213,6 +213,40 @@ static void dbgProcessLine(const char* line, bool logCmd)
     {
         const char c = line[0];
 
+        // ------------------------------------------------------------
+        // Mini-Help (SIM): '?' zeigt Debug/SIM-Kommandos
+        // Hinweis: 'h'/'H' sind Stopzone-Kontakt Force (SIM)
+        // ------------------------------------------------------------
+        if (c == '?')
+        {
+            DBG_PRINTLN("=== SIM CMD HELP (MEGA2_SIM_MODE=1) ===");
+            DBG_PRINTLN("Single-Key:");
+            DBG_PRINTLN("  d    -> Debug Dump");
+            DBG_PRINTLN("  a    -> ACK senden");
+            DBG_PRINTLN("  n    -> NOTHALT setzen (EMERGENCY)");
+            DBG_PRINTLN("  p    -> POWER ON (wenn erlaubt)");
+#if MEGA2_SIM_MODE
+            DBG_PRINTLN("  T/t  -> Trafo-Unten Force ON/OFF (SIM)");
+            DBG_PRINTLN("  h/H  -> Stopzone Kontakt Force OCC/FREE (SIM)");
+            DBG_PRINTLN("  1..6 -> SBHF Sensor-Keys S11..S16 (SIM)");
+#endif
+            DBG_PRINTLN("");
+            DBG_PRINTLN("Line Commands (Block N=1..9):");
+            DBG_PRINTLN("  oN/ON -> Block belegt/frei");
+            DBG_PRINTLN("  uN/UN -> HARD: BN = 1400mA / OFF (Double-Occ hard)");
+            DBG_PRINTLN("  vN/VN -> BASE: BN = 200mA / OFF (EMA-Basis)");
+            DBG_PRINTLN("  wN/WN -> STEP: BN = 350mA / zurueck auf 200mA");
+            DBG_PRINTLN("  kN/KN -> SHORT ON/OFF (SIM)");
+            DBG_PRINTLN("  xN/XN -> Clear Debug-State (SIM)");
+            DBG_PRINTLN("");
+            DBG_PRINTLN("Beispiele (B2):");
+            DBG_PRINTLN("  Hard:     o2, u2, (>=1s), a, U2, a");
+            DBG_PRINTLN("  Adaptive: o2, v2, (>=2-3s), w2, (>=1s), a, W2, a");
+            DBG_PRINTLN("TESTPLAN v1.2 (B2): Hard=o2 u2 wait a U2 a | Adapt=o2 v2 wait w2 wait a W2 a");
+            DBG_PRINTLN("===================================");
+            return;
+        }
+
         // Shadow yard debug: Sensors (SIM only)
 #if MEGA2_SIM_MODE
         if (c=='1') g_sbhf.onS11();
@@ -278,7 +312,8 @@ static void dbgProcessLine(const char* line, bool logCmd)
 #if !MEGA2_SIM_MODE
     // In HW-Modus keine Manipulation per Serial zulassen
     if (cmd=='o' || cmd=='O' || cmd=='i' || cmd=='I' ||
-        cmd=='x' || cmd=='X' || cmd=='k' || cmd=='K')
+        cmd=='x' || cmd=='X' || cmd=='k' || cmd=='K' ||
+        cmd=='u' || cmd=='U' || cmd=='v' || cmd=='V' || cmd=='w' || cmd=='W')
     {
         DBG_PRINTLN("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)");
         return;
@@ -291,6 +326,38 @@ static void dbgProcessLine(const char* line, bool logCmd)
         case 'O': g_bc.debugSetOccupied(n, false); break;
         case 'i': g_bc.debugSetStrom(n, true);     break;
         case 'I': g_bc.debugSetStrom(n, false);    break;
+
+        // 'u' => force synthetic current for safety heuristics (e.g. double occupancy)
+        // 'U' => clear forced current
+        // force hard current for safety tests (DOUBLE_OCC hard case)
+        case 'u':
+            safetyDebugForceBlockCurrentMa(n, 1400); // >1200mA and <SHORT_THRESHOLD_MA
+            DBG_PRINTF("[DBG] FORCE_CURRENT: B%d = 1400mA\n", n);
+            break;
+        case 'U':
+            safetyDebugForceBlockCurrentMa(n, 0);
+            DBG_PRINTF("[DBG] FORCE_CURRENT: B%d = OFF\n", n);
+            break;
+
+        // adaptive double-occupancy test: baseline current
+        case 'v':
+            safetyDebugForceBlockCurrentMa(n, 200);   // base current
+            DBG_PRINTF("[DBG] FORCE_CURRENT BASE: B%d = 200mA\n", n);
+            break;
+        case 'V':
+            safetyDebugForceBlockCurrentMa(n, 0);
+            DBG_PRINTF("[DBG] FORCE_CURRENT BASE: B%d = OFF\n", n);
+            break;
+
+        // adaptive double-occupancy test: second consumer
+        case 'w':
+            safetyDebugForceBlockCurrentMa(n, 350);   // second load
+            DBG_PRINTF("[DBG] FORCE_CURRENT STEP: B%d = 350mA\n", n);
+            break;
+        case 'W':
+            safetyDebugForceBlockCurrentMa(n, 200);   // back to base
+            DBG_PRINTF("[DBG] FORCE_CURRENT STEP: B%d -> 200mA\n", n);
+            break;
 
         case 'k':
         case 'K':
