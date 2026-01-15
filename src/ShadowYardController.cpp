@@ -631,9 +631,13 @@ bool ShadowYardController::startSelftest(bool includeNonCritical)
     m_selftestDone   = false;
     m_selftestIncludeNonCritical = includeNonCritical;
 
-    m_selftestWeicheIdx = 0;
-    m_selftestStep = 0;
-    m_selftestStepStartMs = 0;
+    m_selftestPhase = ST_GERADE;
+    m_selftestNextIdx = 0;
+
+    // NEU: Puls-Sequencer Reset
+    m_stPulseActive  = false;
+    m_stPulseStartMs = 0;
+    m_stPulseIdx     = 0;
 
     for (uint8_t i = 0; i < 4; i++)
     {
@@ -641,83 +645,228 @@ bool ShadowYardController::startSelftest(bool includeNonCritical)
         m_stKnown[i] = false;
         m_stPos[i] = 0;
         m_stChk[i] = 0;
+
+        // Pipeline-Zustand reset
+        m_stT[i].issuedGerade = false;
+        m_stT[i].checkedGerade = false;
+        m_stT[i].okGerade = false;
+        m_stT[i].dueGeradeMs = 0;
+
+        m_stT[i].issuedAbbiegen = false;
+        m_stT[i].checkedAbbiegen = false;
+        m_stT[i].okAbbiegen = false;
+        m_stT[i].dueAbbiegenMs = 0;
     }
 
     DBG_PRINTLN("[SBHF] Selftest started");
+    m_stLoggedThisRun = false;   // pro Selftest neu loggen
+    DBG_PRINTF("[SBHF] ST pipeline init: includeNonCritical=%u\n", (unsigned)m_selftestIncludeNonCritical);
+    
     return true;
 }
 
 void ShadowYardController::selftestUpdate(uint32_t nowMs)
 {
-    static constexpr uint32_t SELFTEST_SETTLE_MS = 1200;
+    static constexpr uint32_t SELFTEST_PULSE_MS  = 500; // wie gewünscht
+    static constexpr uint32_t SELFTEST_SETTLE_MS = 500; // wie gewünscht (1x Sample am Ende)
+
+    if (!m_stLoggedThisRun)
+    {
+        m_stLoggedThisRun = true;
+        DBG_PRINTF("[SBHF] ST pipeline: pulse=%lums settle=%lums maxWeichen=%u\n",
+                   (unsigned long)SELFTEST_PULSE_MS,
+                   (unsigned long)SELFTEST_SETTLE_MS,
+                   (unsigned)(m_selftestIncludeNonCritical ? 4 : 2));
+    }
 
     Weiche* const weichen[4] = { &w12, &w13, &w14, &w15 };
     const uint8_t maxWeichen = m_selftestIncludeNonCritical ? 4 : 2;
 
-    if (m_selftestWeicheIdx >= maxWeichen)
+    // ------------------------------------------------------------
+    // 1) Auswerten: alles, was fällig ist, wird geprüft (parallel)
+    //    RM: 1=Gerade, 0=Abbiegen  (wir loggen das explizit als rmBit)
+    // ------------------------------------------------------------
+    for (uint8_t i = 0; i < maxWeichen; i++)
     {
-        selftestFinish();
-        return;
-    }
+        Weiche* w = weichen[i];
+        auto &st = m_stT[i];
 
-    Weiche* w = weichen[m_selftestWeicheIdx];
-    const uint8_t idx = m_selftestWeicheIdx;
-
-    // Step 0: Gerade anfahren
-    if (m_selftestStep == 0)
-    {
-        w->setGerade();
-        m_selftestStepStartMs = nowMs;
-        m_selftestStep = 1;
-        return;
-    }
-
-    // Step 1: Gerade settle & prüfen, dann Abbiegen anfahren
-    if (m_selftestStep == 1)
-    {
-        if (nowMs - m_selftestStepStartMs < SELFTEST_SETTLE_MS)
-            return;
-
-        const bool rmAbbiegen = w->rueckmeldungAbbiegen();
-        if (!rmAbbiegen) m_stChk[idx] |= 0x01; // Gerade ok
-
-        w->setAbzweig();
-        m_selftestStepStartMs = nowMs;
-        m_selftestStep = 2;
-        return;
-    }
-
-    // Step 2: Abbiegen settle & prüfen, Ergebnis auswerten, nächste Weiche
-    if (m_selftestStep == 2)
-    {
-        if (nowMs - m_selftestStepStartMs < SELFTEST_SETTLE_MS)
-            return;
-
-        const bool rmAbbiegen = w->rueckmeldungAbbiegen();
-        if (rmAbbiegen) m_stChk[idx] |= 0x02; // Abbiegen ok
-
-        const bool ok = ((m_stChk[idx] & 0x03) == 0x03);
-        m_stOk[idx] = ok;
-
-        if (ok)
+        // Gerade prüfen
+        if (st.issuedGerade && !st.checkedGerade && (nowMs >= st.dueGeradeMs))
         {
-            // Letzter Befehl war Abbiegen
-            m_stKnown[idx] = true;
-            m_stPos[idx]   = 1;
+            const bool rmAb = w->rueckmeldungAbbiegen();      // semantisch: true=Abbiegen
+            const uint8_t rmBit = rmAb ? 0 : 1;              // gewünschte Sicht: 1=Gerade,0=Abbiegen
+
+            st.okGerade = (rmBit == 1);                       // Gerade ok wenn rmBit==1
+            st.checkedGerade = true;
+
+            DBG_PRINTF("[SBHF] ST eval W%u GERADE: rmBit=%u (rmAb=%u) ok=%u\n",
+                       (unsigned)(12 + i), (unsigned)rmBit, (unsigned)rmAb, (unsigned)st.okGerade);
+
+            if (!st.okGerade)
+            {
+                m_stKnown[i] = true;
+                m_stPos[i]   = rmBit ? 0 : 1; // 0=GERADE,1=ABBIEGEN (bei fault ist es aktuell Abbiegen)
+                DBG_PRINTF("[SBHF] ST fault W%u GERADE -> assume stuck pos=%u\n",
+                           (unsigned)(12 + i), (unsigned)m_stPos[i]);
+            }
+        }
+
+        // Abbiegen prüfen
+        if (st.issuedAbbiegen && !st.checkedAbbiegen && (nowMs >= st.dueAbbiegenMs))
+        {
+            const bool rmAb = w->rueckmeldungAbbiegen();      // true=Abbiegen
+            const uint8_t rmBit = rmAb ? 0 : 1;              // 1=Gerade,0=Abbiegen
+
+            st.okAbbiegen = (rmBit == 0);                     // Abbiegen ok wenn rmBit==0
+            st.checkedAbbiegen = true;
+
+            DBG_PRINTF("[SBHF] ST eval W%u ABBIEGEN: rmBit=%u (rmAb=%u) ok=%u\n",
+                       (unsigned)(12 + i), (unsigned)rmBit, (unsigned)rmAb, (unsigned)st.okAbbiegen);
+
+            if (!st.okAbbiegen)
+            {
+                m_stKnown[i] = true;
+                m_stPos[i]   = rmBit ? 0 : 1; // wenn fault, ist die Weiche vermutlich auf Gerade (rmBit==1)
+                DBG_PRINTF("[SBHF] ST fault W%u ABBIEGEN -> assume stuck pos=%u\n",
+                           (unsigned)(12 + i), (unsigned)m_stPos[i]);
+            }
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 2) Puls-Sequencer: genau 1 Puls zur Zeit, PULSE_MS breit.
+    //    Puls-Ende startet settle für diese Weiche, und im selben Tick
+    //    kann der nächste Puls beginnen (Pipeline wie gewünscht).
+    // ------------------------------------------------------------
+
+    auto startPulseForIdx = [&](uint8_t i)
+    {
+        if (m_selftestPhase == ST_GERADE)
+        {
+            DBG_PRINTF("[SBHF] ST pulse ON  W%u -> GERADE\n", (unsigned)(12 + i));
+            weichen[i]->setGerade();
         }
         else
         {
-            // Wir nehmen den aktuellen RM-Zustand als "bekannte" Stellung (stuck).
-            // (Wenn der RM-Sensor defekt ist, bleibt das dennoch konservativ durch allowedMask-Logik.)
-            m_stKnown[idx] = true;
-            m_stPos[idx]   = rmAbbiegen ? 1 : 0;
+            DBG_PRINTF("[SBHF] ST pulse ON  W%u -> ABBIEGEN\n", (unsigned)(12 + i));
+            weichen[i]->setAbzweig();
         }
 
-        m_selftestWeicheIdx++;
-        m_selftestStep = 0;
-        m_selftestStepStartMs = nowMs;
-        return;
+        m_stPulseActive  = true;
+        m_stPulseStartMs = nowMs;
+        m_stPulseIdx     = i;
+    };
+
+    auto finishPulseForIdx = [&](uint8_t i)
+    {
+        // Hinweis: Es gibt hier bewusst kein "Coil OFF", weil dein Weiche-Objekt
+        // offenbar intern den Impuls taktet (wie in processWeichenSequence()).
+        // Falls es eine echte OFF-Funktion gibt, kann man sie hier ergänzen.
+
+        auto &st = m_stT[i];
+
+        if (m_selftestPhase == ST_GERADE)
+        {
+            st.issuedGerade = true;
+            st.dueGeradeMs  = nowMs + SELFTEST_SETTLE_MS; // settle ab Puls-ENDE
+            DBG_PRINTF("[SBHF] ST pulse OFF W%u GERADE -> due +%lums\n",
+                       (unsigned)(12 + i), (unsigned long)SELFTEST_SETTLE_MS);
+        }
+        else
+        {
+            st.issuedAbbiegen = true;
+            st.dueAbbiegenMs  = nowMs + SELFTEST_SETTLE_MS; // settle ab Puls-ENDE
+            DBG_PRINTF("[SBHF] ST pulse OFF W%u ABBIEGEN -> due +%lums\n",
+                       (unsigned)(12 + i), (unsigned long)SELFTEST_SETTLE_MS);
+        }
+
+        m_stPulseActive = false;
+    };
+
+    // Wenn gerade ein Puls läuft: ggf. beenden
+    if (m_stPulseActive)
+    {
+        if (nowMs - m_stPulseStartMs >= SELFTEST_PULSE_MS)
+        {
+            finishPulseForIdx(m_stPulseIdx);
+            // danach darf im selben Update gleich der nächste Puls starten
+        }
+        else
+        {
+            // Puls läuft noch -> in diesem Tick keinen neuen Puls starten
+            return;
+        }
     }
+
+    // Wenn kein Puls läuft: ggf. nächsten starten
+    if (!m_stPulseActive)
+    {
+        // Phase GERADE
+        if (m_selftestPhase == ST_GERADE)
+        {
+            if (m_selftestNextIdx < maxWeichen)
+            {
+                startPulseForIdx(m_selftestNextIdx);
+                m_selftestNextIdx++;
+                return;
+            }
+
+            // Nur umschalten, wenn alle Gerade-Impulse auch wirklich "issued" sind
+            bool allIssuedGerade = true;
+            for (uint8_t i = 0; i < maxWeichen; i++)
+                if (!m_stT[i].issuedGerade) { allIssuedGerade = false; break; }
+
+            if (allIssuedGerade)
+            {
+                m_selftestPhase   = ST_ABBIEGEN;
+                m_selftestNextIdx = 0;
+                DBG_PRINTLN("[SBHF] ST phase switch -> ABBIEGEN");
+            }
+
+            // Kein return hier: Abbiegen kann im nächsten Tick starten
+        }
+
+        // Phase ABBIEGEN
+        if (m_selftestPhase == ST_ABBIEGEN)
+        {
+            if (m_selftestNextIdx < maxWeichen)
+            {
+                startPulseForIdx(m_selftestNextIdx);
+                m_selftestNextIdx++;
+                return;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------
+    // 3) Abschluss: erst wenn alle relevanten Weichen beide Checks haben
+    // ------------------------------------------------------------
+    bool allDone = true;
+    for (uint8_t i = 0; i < maxWeichen; i++)
+    {
+        const auto &st = m_stT[i];
+        if (!(st.checkedGerade && st.checkedAbbiegen))
+        {
+            allDone = false;
+            break;
+        }
+    }
+    if (!allDone)
+        return;
+
+    for (uint8_t i = 0; i < maxWeichen; i++)
+    {
+        const auto &st = m_stT[i];
+        m_stOk[i] = (st.okGerade && st.okAbbiegen);
+        DBG_PRINTF("[SBHF] Selftest W%u ok=%u known=%u pos=%u\n",
+                   (unsigned)(12 + i),
+                   (unsigned)m_stOk[i],
+                   (unsigned)m_stKnown[i],
+                   (unsigned)m_stPos[i]);
+    }
+
+    selftestFinish();
 }
 
 void ShadowYardController::selftestFinish()

@@ -63,10 +63,11 @@ Im PlatformIO-Tab das jeweilige Environment auswählen (SIM oder HW) und dann **
 | Command | Funktion |
 |---|---|
 | `p` | Power ON (Hauptstrom) |
-| `n` | Power OFF (Hauptstrom) |
+| `N` | Power OFF (Hauptstrom) **ohne Emergency** (nur SSR/Outputs aus) |
+| `n` | **NOTHALT / Emergency** setzen (SafetyLock, SSR AUS) |
 | `a` | ACK (Safety-Reset, falls möglich) |
 | `d` | Diagnose-Dump (Blocks, Safety, SBHF-Status) |
-| `t` | Trafo-Diagnose: Vrms + `powered` (oben/unten) + Force-Status (Trafo unten) |
+
 
 > Hinweis: `a` kann **ACK OK** oder **ACK BLOCKED** melden (siehe Kapitel 5).
 
@@ -82,6 +83,10 @@ Im PlatformIO-Tab das jeweilige Environment auswählen (SIM oder HW) und dann **
 | `i<id>` | Block `<id>` **strom aktiv** (z.B. `i6`) |
 | `I<id>` | Block `<id>` **strom inaktiv** (z.B. `I6`) |
 | `k<id>` | **Kurzschluss** am Block `<id>` auslösen (z.B. `k6`) → Safety-Lock + SSR AUS |
+| `h/H` | Stopzone-Kontakt (`k_nothalt`) Force OCC/FREE (SIM) |
+| `u<id>/U<id>` | Force Current: Hard 1400mA / OFF (Double-Occ hard test) |
+| `v<id>/V<id>` | Force Current: BASE 200mA / OFF (EMA-Basis) |
+| `w<id>/W<id>` | Force Current: STEP 350mA / zurück auf 200mA |
 
 Beispiele:
 - `o6` → Block 6 belegt (Kontaktgleis belegt)

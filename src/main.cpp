@@ -161,8 +161,12 @@ static bool s_forceSysFlagsPrint = false;
 
 static void dbgPrintSysFlags(uint16_t flags)
 {
-    Serial.print(F("SYS flags=0b"));
-    Serial.print(flags, BIN);
+    // Doku: SYS flags in HEX (on-change) für stabilere Logs
+    Serial.print(F("SYS flags=0x"));
+    if (flags < 0x1000) Serial.print('0');
+    if (flags < 0x0100) Serial.print('0');
+    if (flags < 0x0010) Serial.print('0');
+    Serial.print(flags, HEX);
     Serial.print(F(" ["));
 
     bool first = true;
@@ -259,7 +263,10 @@ static void dbgProcessLine(const char* line, bool logCmd)
         if (c>='1' && c<='6') { DBG_PRINTLN("[DBG] SIM sensor keys disabled (MEGA2_SIM_MODE=0)"); return; }
 #endif
 
+        // 'r' nur in SIM (Fehlbedienung in HW vermeiden)
+#if MEGA2_SIM_MODE
         if (c=='r') g_sbhf.onResetAck();
+#endif
         if (c=='d') mega2DebugDump();
 
         // SAFETY debug
@@ -268,6 +275,19 @@ static void dbgProcessLine(const char* line, bool logCmd)
             const bool ok = safetyPowerOn();
             DBG_PRINTLN(ok ? "[DBG] POWER ON OK" : "[DBG] POWER ON BLOCKED");
         }
+
+        // Power OFF ohne Emergency (nur SSR/Outputs aus)
+        // -> hilfreich für Service/Debug ohne SafetyLock
+        if (c == 'N')
+        {
+            g_power.setMainPower(false);
+            g_power.setSbhfGleis(1, false);
+            g_power.setSbhfGleis(2, false);
+            g_power.setSbhfGleis(3, false);
+            g_power.setBlock5ToSBhf(false);
+            DBG_PRINTLN("[DBG] POWER OFF (no emergency)");
+        }
+
 
         if (c == 'n')
         {
@@ -386,7 +406,7 @@ static void dbgHandleSerial()
         if (s_dbgLen == 0)
         {
             const bool isSingle =
-                (ch == 'p' || ch == 'n' || ch == 'a' || ch == 'r' || ch == 'd' || ch == 'T' || ch == 't') ||
++                (ch == 'p' || ch == 'n' || ch == 'N' || ch == 'a' || ch == 'r' || ch == 'd' || ch == 'T' || ch == 't') ||
                 ((ch >= '1' && ch <= '6') && MEGA2_SIM_MODE) ||
                 ((ch == 'h' || ch == 'H') && MEGA2_SIM_MODE);
 

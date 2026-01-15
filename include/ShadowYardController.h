@@ -98,10 +98,31 @@ bool     m_selftestActive = false;
 bool     m_selftestDone   = false;
 bool     m_selftestIncludeNonCritical = true;
 bool     m_selftestForcedPowerOff = false;
+bool     m_stLoggedThisRun = false;
 
-uint8_t  m_selftestWeicheIdx = 0;   // 0..n-1
-uint8_t  m_selftestStep      = 0;   // 0=setGerade,1=wait,2=setAbzweig,3=wait,4=done
-uint32_t m_selftestStepStartMs = 0;
+// Pipeline-Selftest: Impulse getaktet (PULSE_MS), Settling/Auswertung parallel
+bool     m_stPulseActive   = false;
+uint32_t m_stPulseStartMs  = 0;
+uint8_t  m_stPulseIdx      = 0;   // welche Weiche pulst gerade (0..maxWeichen-1)
+
+
+    // Pipeline-Selftest: Impulse sequentiell, Settling/Auswertung parallel
+    enum SelftestPhase : uint8_t { ST_GERADE = 0, ST_ABBIEGEN = 1 };
+    SelftestPhase m_selftestPhase = ST_GERADE;
+    uint8_t  m_selftestNextIdx = 0; // welche Weiche als nächste einen Impuls bekommt (0..maxWeichen-1)
+
+    struct SelftestTurnoutState {
+        bool issuedGerade  = false;
+        bool checkedGerade = false;
+        bool okGerade      = false;
+        uint32_t dueGeradeMs = 0;
+
+        bool issuedAbbiegen  = false;
+        bool checkedAbbiegen = false;
+        bool okAbbiegen      = false;
+        uint32_t dueAbbiegenMs = 0;
+    };
+    SelftestTurnoutState m_stT[4];
 
 // Ergebnisse pro Weiche (Index 0..3 => W12,W13,W14,W15)
 bool     m_stOk[4]    = {false, false, false, false};
