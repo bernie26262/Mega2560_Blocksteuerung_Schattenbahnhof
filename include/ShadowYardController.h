@@ -97,6 +97,7 @@ uint8_t m_warningMask = 0x00;
 bool     m_selftestActive = false;
 bool     m_selftestDone   = false;
 bool     m_selftestIncludeNonCritical = true;
+bool     m_selftestForcedPowerOff = false;
 
 uint8_t  m_selftestWeicheIdx = 0;   // 0..n-1
 uint8_t  m_selftestStep      = 0;   // 0=setGerade,1=wait,2=setAbzweig,3=wait,4=done

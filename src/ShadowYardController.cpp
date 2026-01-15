@@ -608,6 +608,24 @@ bool ShadowYardController::startSelftest(bool includeNonCritical)
     // Reset derived status; wird am Ende neu berechnet
     m_allowedMask = 0x07;
     m_warningMask = 0x00;
+    // ------------------------------------------------------------
+    // Safety: Während Selftest läuft darf kein Zug fahren.
+    // => MainPower/SSR AUS. (Der User schaltet nach erfolgreichem Selftest
+    //    bewusst wieder ein.)
+    // Zusätzlich: SBHF-Abgänge/Relais definiert AUS, um Altlasten zu vermeiden.
+    // ------------------------------------------------------------
+    if (g_power.isMainPowerOn())
+        DBG_PRINTLN("[SBHF] Selftest: main power ON -> turning OFF");
+    g_power.setMainPower(false);
+    m_selftestForcedPowerOff = true;
+
+    // Definiert AUS: SBHF-Abgänge & Verbindung Block5->SBHF
+    g_power.setSbhfGleis(1, false);
+    g_power.setSbhfGleis(2, false);
+    g_power.setSbhfGleis(3, false);
+    g_power.setBlock5ToSBhf(false);
+    m_exitPowerOn = false;
+
 
     m_selftestActive = true;
     m_selftestDone   = false;
@@ -769,4 +787,10 @@ void ShadowYardController::selftestFinish()
     m_selftestDone   = true;
 
     DBG_PRINTF("[SBHF] Selftest done: allowedMask=0x%02X warnMask=0x%02X\n", m_allowedMask, m_warningMask);
+    
+    // Hinweis: Wenn wir Power für den Selftest bewusst ausgeschaltet haben,
+    // bleibt sie absichtlich AUS. User muss danach manuell wieder einschalten.
+    if (m_selftestForcedPowerOff && !g_power.isMainPowerOn())
+        DBG_PRINTLN("[SBHF] Selftest finished: MAIN POWER remains OFF (manual power-on required)");
+    m_selftestForcedPowerOff = false; // one-shot
 }
