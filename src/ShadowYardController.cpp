@@ -587,22 +587,35 @@ void ShadowYardController::setWarningForWeiche(uint8_t weicheId)
     }
 }
 
-bool ShadowYardController::startSelftest(bool includeNonCritical)
+bool ShadowYardController::startSelftestImpl(bool includeNonCritical, bool allowFromCleanIdle)
 {
+    // HART: niemals parallel
     if (m_selftestActive)
+        return false;
+
+    // HART: niemals bei aktivem HW-NOT-AUS
+    if (safetyIsEmergencyActive())
+        return false;
+
+    // Safety-Lock: im Normalbetrieb sperren, aber für Startup-Checklist Selftest erlauben
+    if (!allowFromCleanIdle && safetyIsLocked())
         return false;
 
     // Selftest darf starten:
     // - nach Hard-Error (klassischer Flow)
     // - oder im Idle, wenn es Warnings/Restriktionen gibt (UI Retry im eingeschränkten Betrieb)
+    // - oder (Startup-Checklist) im Idle auch ohne Warnungen/Restriktionen (z.B. Boot-ERR / SYS_ERROR_PRESENT)
     if (m_state != SBhfState::Error)
     {
         if (m_state != SBhfState::Idle)
             return false;
 
-        // Im Idle nur sinnvoll, wenn wirklich Warnungen/Restriktionen vorliegen
-        if (m_warningMask == 0 && m_allowedMask == 0x07)
-            return false;
+        if (!allowFromCleanIdle)
+        {
+            // Im Idle nur sinnvoll, wenn wirklich Warnungen/Restriktionen vorliegen
+            if (m_warningMask == 0 && m_allowedMask == 0x07)
+                return false;
+        }
     }
 
     // Reset derived status; wird am Ende neu berechnet
@@ -651,11 +664,13 @@ bool ShadowYardController::startSelftest(bool includeNonCritical)
         m_stT[i].checkedGerade = false;
         m_stT[i].okGerade = false;
         m_stT[i].dueGeradeMs = 0;
+        m_stT[i].expGeradeBit = 0xFF;
 
         m_stT[i].issuedAbbiegen = false;
         m_stT[i].checkedAbbiegen = false;
         m_stT[i].okAbbiegen = false;
         m_stT[i].dueAbbiegenMs = 0;
+        m_stT[i].expAbbiegenBit = 0xFF;
     }
 
     DBG_PRINTLN("[SBHF] Selftest started");
@@ -663,6 +678,18 @@ bool ShadowYardController::startSelftest(bool includeNonCritical)
     DBG_PRINTF("[SBHF] ST pipeline init: includeNonCritical=%u\n", (unsigned)m_selftestIncludeNonCritical);
     
     return true;
+}
+
+bool ShadowYardController::startSelftest(bool includeNonCritical)
+{
+    // normaler Flow: Idle nur wenn Warnungen/Restriktionen vorliegen
+    return startSelftestImpl(includeNonCritical, false);
+}
+
+bool ShadowYardController::startSelftestStartup(bool includeNonCritical)
+{
+    // Startup-Checklist: erlaubt Start auch aus sauberem Idle (z.B. Boot-ERR)
+    return startSelftestImpl(includeNonCritical, true);
 }
 
 void ShadowYardController::selftestUpdate(uint32_t nowMs)
@@ -697,18 +724,27 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
             const bool rmAb = w->rueckmeldungAbbiegen();      // semantisch: true=Abbiegen
             const uint8_t rmBit = rmAb ? 0 : 1;              // gewünschte Sicht: 1=Gerade,0=Abbiegen
 
-            st.okGerade = (rmBit == 1);                       // Gerade ok wenn rmBit==1
+            const uint8_t exp = st.expGeradeBit;
+            st.okGerade = (exp != 0xFF) ? (rmBit == exp) : false;
             st.checkedGerade = true;
 
-            DBG_PRINTF("[SBHF] ST eval W%u GERADE: rmBit=%u (rmAb=%u) ok=%u\n",
-                       (unsigned)(12 + i), (unsigned)rmBit, (unsigned)rmAb, (unsigned)st.okGerade);
-
+            DBG_PRINTF("[SBHF] ST eval W%u PH1: rmBit=%u (rmAb=%u) exp=%u ok=%u\n",
+                       (unsigned)(12 + i), (unsigned)rmBit, (unsigned)rmAb, (unsigned)exp, (unsigned)st.okGerade);
             if (!st.okGerade)
             {
                 m_stKnown[i] = true;
                 m_stPos[i]   = rmBit ? 0 : 1; // 0=GERADE,1=ABBIEGEN (bei fault ist es aktuell Abbiegen)
-                DBG_PRINTF("[SBHF] ST fault W%u GERADE -> assume stuck pos=%u\n",
+                DBG_PRINTF("[SBHF] ST fault W%u PH1 -> assume stuck pos=%u\n",
                            (unsigned)(12 + i), (unsigned)m_stPos[i]);
+                // NEW: If phase 1 already fails (no toggle / wrong position),
+                // phase 2 is pointless for this turnout. Mark phase 2 as failed and checked.
+                st.issuedAbbiegen  = true;
+                st.checkedAbbiegen = true;
+                st.okAbbiegen      = false;
+                st.dueAbbiegenMs   = nowMs;
+                st.expAbbiegenBit  = 0xFF;
+                DBG_PRINTF("[SBHF] ST skip W%u PH2 (PH1 already failed)\n", (unsigned)(12 + i));
+
             }
         }
 
@@ -718,17 +754,18 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
             const bool rmAb = w->rueckmeldungAbbiegen();      // true=Abbiegen
             const uint8_t rmBit = rmAb ? 0 : 1;              // 1=Gerade,0=Abbiegen
 
-            st.okAbbiegen = (rmBit == 0);                     // Abbiegen ok wenn rmBit==0
+            const uint8_t exp = st.expAbbiegenBit;
+            st.okAbbiegen = (exp != 0xFF) ? (rmBit == exp) : false;
             st.checkedAbbiegen = true;
 
-            DBG_PRINTF("[SBHF] ST eval W%u ABBIEGEN: rmBit=%u (rmAb=%u) ok=%u\n",
-                       (unsigned)(12 + i), (unsigned)rmBit, (unsigned)rmAb, (unsigned)st.okAbbiegen);
+            DBG_PRINTF("[SBHF] ST eval W%u PH2: rmBit=%u (rmAb=%u) exp=%u ok=%u\n",
+                       (unsigned)(12 + i), (unsigned)rmBit, (unsigned)rmAb, (unsigned)exp, (unsigned)st.okAbbiegen);
 
             if (!st.okAbbiegen)
             {
                 m_stKnown[i] = true;
                 m_stPos[i]   = rmBit ? 0 : 1; // wenn fault, ist die Weiche vermutlich auf Gerade (rmBit==1)
-                DBG_PRINTF("[SBHF] ST fault W%u ABBIEGEN -> assume stuck pos=%u\n",
+                DBG_PRINTF("[SBHF] ST fault W%u PH2 -> assume stuck pos=%u\n",
                            (unsigned)(12 + i), (unsigned)m_stPos[i]);
             }
         }
@@ -742,16 +779,23 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
 
     auto startPulseForIdx = [&](uint8_t i)
     {
-        if (m_selftestPhase == ST_GERADE)
-        {
-            DBG_PRINTF("[SBHF] ST pulse ON  W%u -> GERADE\n", (unsigned)(12 + i));
-            weichen[i]->setGerade();
-        }
-        else
-        {
-            DBG_PRINTF("[SBHF] ST pulse ON  W%u -> ABBIEGEN\n", (unsigned)(12 + i));
-            weichen[i]->setAbzweig();
-        }
+        // NEW: always toggle against current RM before evaluation step
+        const bool rmAbNow = weichen[i]->rueckmeldungAbbiegen();   // true=Abbiegen
+        const bool targetAb = !rmAbNow;                            // toggle
+        const uint8_t expBit = targetAb ? 0 : 1;                   // 1=Gerade,0=Abbiegen
+
+        auto &st = m_stT[i];
+        if (m_selftestPhase == ST_GERADE) st.expGeradeBit = expBit;
+        else                              st.expAbbiegenBit = expBit;
+
+        DBG_PRINTF("[SBHF] ST pulse ON  W%u -> %s (rmAbNow=%u expBit=%u)\n",
+                   (unsigned)(12 + i),
+                   targetAb ? "ABBIEGEN" : "GERADE",
+                   (unsigned)rmAbNow,
+                   (unsigned)expBit);
+
+        if (targetAb) weichen[i]->setAbzweig();
+        else          weichen[i]->setGerade();
 
         m_stPulseActive  = true;
         m_stPulseStartMs = nowMs;
@@ -807,6 +851,12 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
         {
             if (m_selftestNextIdx < maxWeichen)
             {
+                // NEW: do not start PH2 pulse if PH2 already marked checked (e.g. PH1 failed)
+                if (m_stT[m_selftestNextIdx].checkedAbbiegen)
+                {
+                    m_selftestNextIdx++;
+                    return;
+                }
                 startPulseForIdx(m_selftestNextIdx);
                 m_selftestNextIdx++;
                 return;

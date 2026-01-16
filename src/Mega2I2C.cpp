@@ -328,9 +328,17 @@ void megaI2C_update()
     {
         s_pendingSelftestRetry = false;
 
-        const bool started = shadowController.startSelftest(true);
+        // Startup-Checklist: darf auch bei Boot-ERR starten (SYS_ERROR_PRESENT),
+        // aber weiterhin NICHT bei HW-Notaus / Safety-Lock / already running.
+        const bool started = shadowController.startSelftestStartup(true);
         if (started) DBG_PRINTLN("[I2C] SBHF selftest retry started");
-        else         DBG_PRINTLN("[I2C] SBHF selftest retry rejected (state/conditions)");
+        else         DBG_PRINTF("[I2C] SBHF selftest retry rejected: state=%u selftestActive=%u lock=%u notaus=%u warn=0x%02X allow=0x%02X\n",
+                                (unsigned)shadowController.state(),
+                                (unsigned)shadowController.isSelftestActive(),
+                                (unsigned)safetyIsLocked(),
+                                (unsigned)safetyIsEmergencyActive(),
+                                (unsigned)shadowController.warningMask(),
+                                (unsigned)shadowController.allowedGleisMask());
     }
 }
 

@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
+// forward decls ...
 class BlockController;
 class Weiche;
 
@@ -77,6 +78,11 @@ uint8_t warningMask() const { return m_warningMask; }
 // --------------------------------------------------------
 // includeNonCritical=true => testet zusätzlich W14/W15 (Ergebnis erzeugt nur Warning)
 bool startSelftest(bool includeNonCritical = true);
+
+// Startup-Checklist Trigger: erlaubt Start auch aus sauberem Idle (z.B. Boot-ERR / SYS_ERROR_PRESENT),
+// aber weiterhin NICHT bei aktivem HW-Notaus / Safety-Lock / wenn Selftest bereits läuft.
+bool startSelftestStartup(bool includeNonCritical = true);
+
 bool isSelftestActive() const { return m_selftestActive; }
 bool isSelftestDone()   const { return m_selftestDone; }
 void clearSelftestDone() { m_selftestDone = false; }
@@ -116,11 +122,14 @@ uint8_t  m_stPulseIdx      = 0;   // welche Weiche pulst gerade (0..maxWeichen-1
         bool checkedGerade = false;
         bool okGerade      = false;
         uint32_t dueGeradeMs = 0;
+        // expected RM bit at evaluation time: 1=Gerade, 0=Abbiegen
+        uint8_t expGeradeBit = 0xFF;
 
         bool issuedAbbiegen  = false;
         bool checkedAbbiegen = false;
         bool okAbbiegen      = false;
         uint32_t dueAbbiegenMs = 0;
+        uint8_t expAbbiegenBit = 0xFF;
     };
     SelftestTurnoutState m_stT[4];
 
@@ -135,6 +144,10 @@ void selftestFinish();
 
 void setWarningForWeiche(uint8_t weicheId);
 bool isCriticalWeiche(uint8_t weicheId) const;
+
+// Shared implementation:
+// allowFromCleanIdle=true => Idle-Start auch ohne Warnungen/Restriktionen (Startup-Checklist)
+bool startSelftestImpl(bool includeNonCritical, bool allowFromCleanIdle);
 
     // --------------------------------------------------------
     // Weichen-Status für Proto (ersetzt g_weichen komplett)

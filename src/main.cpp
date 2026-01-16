@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "mega2_pins.h"
+#include <EEPROM.h>
 
 #ifndef MEGA2_SIM_MODE
 #define MEGA2_SIM_MODE 0
@@ -42,6 +43,40 @@
 // einen Controller-Neustart zuverlässig zu erkennen,
 // auch wenn die Verbindung kurzzeitig unterbrochen war.
 uint16_t g_bootId = 0;
+
+static uint16_t loadIncBootCounter()
+{
+    // Address 0..1 reserved for boot counter (uint16_t)
+    uint16_t c = 0;
+    EEPROM.get(0, c);
+    c++;
+    EEPROM.put(0, c);
+    return c;
+}
+
+
+static uint16_t makeBootId16()
+{
+    // Guaranteed change per boot via EEPROM counter, then mix with timing.
+    uint16_t x = loadIncBootCounter();
+
+    x ^= (uint16_t)micros();
+    x ^= (uint16_t)(millis() & 0xFFFFu);
+#if defined(__AVR__)
+    x ^= (uint16_t)TCNT1;
+    x ^= (uint16_t)(TCNT0 << 8);
+    x ^= (uint16_t)(TCNT2 << 4);
+#endif
+
+    // light diffusion
+    x ^= (x << 7);
+    x ^= (x >> 9);
+    x ^= (x << 8);
+
+    if (x == 0) x = 1;
+    return x;
+}
+
 
 // --------------------- BLOCKS -----------------------------------------------
 // IDs sind 1-basiert (Index 0 bleibt nullptr)
@@ -457,7 +492,9 @@ static void dbgMaybePrintSysFlags(uint16_t flags)
 void setup()
 {
     // Neue Boot-Instanz signalisieren
-    g_bootId++;
+    // BootId must change on every reboot so ESP can detect Mega reboots reliably.
+    // (Not persistent; "random per boot" is enough.)
+    g_bootId = makeBootId16();
 
     DBG_BEGIN(115200);
     while (!Serial && millis() < 1000) {}
