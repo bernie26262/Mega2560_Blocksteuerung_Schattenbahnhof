@@ -909,9 +909,12 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
     {
         const auto &st = m_stT[i];
         m_stOk[i] = (st.okGerade && st.okAbbiegen);
-        DBG_PRINTF("[SBHF] Selftest W%u ok=%u known=%u pos=%u\n",
+        // Detailed per-turnout summary: PH1/PH2 + overall
+        DBG_PRINTF("[SBHF] ST sum W%u: PH1=%s PH2=%s overall=%s known=%u pos=%u\n",
                    (unsigned)(12 + i),
-                   (unsigned)m_stOk[i],
+                   st.okGerade   ? "OK" : "FAIL",
+                   st.okAbbiegen ? "OK" : "FAIL",
+                   m_stOk[i]     ? "OK" : "FAIL",
                    (unsigned)m_stKnown[i],
                    (unsigned)m_stPos[i]);
     }
