@@ -7,6 +7,23 @@
 constexpr uint8_t M2_NUM_BLOCKS        = 9;  // 6 Strecke + 3 SBhf
 constexpr uint8_t M2_NUM_SHADOW_TRACKS = 3;  // SBhf-Gleise
 
+ 
+ // =====================================================
+ //  Mega2 Analog Payload (I2C) – fixed point
+ //  - vA10/vB10: 0.1V Schritte (V * 10)
+ //  - i_mA[]   : Milliampere (0..~1500)
+ //  Size: 24 bytes (Wire-safe)
+ // =====================================================
+ struct __attribute__((packed)) Mega2AnalogPayload
+ {
+     uint8_t  seq;          // increments per response
+     uint8_t  flags;        // reserved (0 for now)
+     uint16_t vA10;         // Trafo A voltage *10 (0.1V)
+     uint16_t vB10;         // Trafo B voltage *10 (0.1V)
+     uint16_t i_mA[M2_NUM_BLOCKS]; // B1..B9 currents in mA
+ };
+ static_assert(sizeof(Mega2AnalogPayload) == (2 + 2*2 + 2*M2_NUM_BLOCKS), "Mega2AnalogPayload size");
+
 // =====================================================
 //  I2C Commands (ESP -> Mega2)
 // =====================================================
@@ -23,7 +40,9 @@ enum : uint8_t
     M2_CMD_GET_SAFETY_STATUS  = 0x20, // -> Mega2SafetyStatus
     M2_CMD_GET_BLOCK_STATUS   = 0x21, // -> BlockStatus[M2_NUM_BLOCKS]
     M2_CMD_GET_SHADOW_STATUS  = 0x22, // -> ShadowYardStatus
-    M2_CMD_GET_ENTRY_MATRIX  = 0x23  // -> uint16_t[M2_NUM_BLOCKS] (FROM->TO)
+    M2_CMD_GET_ENTRY_MATRIX  = 0x23,  // -> uint16_t[M2_NUM_BLOCKS] (FROM->TO)
+    M2_CMD_GET_ENTRY_PREVIEW_MATRIX = 0x24, // -> uint16_t[M2_NUM_BLOCKS] (preview)
+    M2_CMD_GET_ANALOG         = 0x25  // -> Mega2AnalogPayload (fixed point)
 };
 
 // =====================================================
@@ -47,8 +66,11 @@ enum SafetyBlockReason : uint8_t
     SAFETY_BLOCK_BOOT      = 1,
     // Historisch: "EMERGENCY" (2) – wird beibehalten, aber wir unterscheiden
     // künftig die Hauptursachen genauer.
-    SAFETY_BLOCK_EMERGENCY = 2,
+
+    // 2 war historisch "EMERGENCY". Heute ist der präzise Grund: NOTAUS.
     SAFETY_BLOCK_NOTAUS    = 2,
+    SAFETY_BLOCK_EMERGENCY = SAFETY_BLOCK_NOTAUS, // Alias nur für Kompatibilität
+ 
     SAFETY_BLOCK_SHORT     = 3,
     SAFETY_BLOCK_SSR_STUCK = 4
 };
@@ -106,5 +128,6 @@ enum Mega2Command : uint8_t {
     CMD_GET_M2_SBH    = 0x22,
     CMD_GET_M2_ENTRY  = 0x23,
     CMD_GET_M2_ENTRY_PREVIEW = 0x24,
+    CMD_GET_M2_ANALOG = 0x25,
 };
 

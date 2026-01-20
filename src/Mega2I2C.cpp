@@ -11,6 +11,8 @@
 #include "system/status_system.h"
 #include "safety.h"
 #include "mega2_debug.h"
+ 
+// Analog payload (fixed point): see proto_common.h Mega2AnalogPayload
 
 // ------------------------------------------------------------
 // Externe Controller aus main.cpp
@@ -50,6 +52,7 @@ static bool isNeighbor(uint8_t fromBlock, uint8_t toBlock)
 static bool    s_cmdResponsePending = false;
 static uint8_t s_cmdResponseOk      = 0;
 static uint8_t s_pendingResponse    = 0;
+static uint8_t s_analogSeq          = 0;
 
 // Selftest-Retry darf NICHT im I2C-Callback gestartet werden (kann onRequest verhungern lassen)
 static volatile bool s_pendingSelftestRetry = false;
@@ -237,6 +240,32 @@ void i2cOnRequest()
             Wire.write(reinterpret_cast<uint8_t*>(&st), sizeof(st));
             break;
         }
+         
+         case CMD_GET_M2_ANALOG:
+         {
+             Mega2AnalogPayload p{};
+             p.seq   = ++s_analogSeq;
+             p.flags = 0;
+ 
+             // TODO: Trafo RMS values are not wired in the uploaded files.
+             // Set to 0 for now; patch once we know the authoritative source.
+             p.vA10 = 0;
+             p.vB10 = 0;
+ 
+             // Currents:
+             // We currently don't have an mA conversion source in the provided files.
+             // As a safe compile-time placeholder, we reuse BlockStatus.stromRaw (ADC).
+             // This gives you "changing numbers" in the UI immediately; calibration can follow.
+             BlockStatus blocks[M2_NUM_BLOCKS]{};
+             buildMega2BlockStatus(blocks, blockController);
+             for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++)
+             {
+                 p.i_mA[i] = blocks[i].stromRaw; // placeholder
+             }
+ 
+             Wire.write(reinterpret_cast<uint8_t*>(&p), sizeof(p));
+             break;
+         }
 
         
 case CMD_GET_M2_ENTRY:
