@@ -245,22 +245,21 @@ void i2cOnRequest()
          {
              Mega2AnalogPayload p{};
              p.seq   = ++s_analogSeq;
-             p.flags = 0;
+             // flags bit1: voltages invalid (solange Trafo-Spannungsmessung noch nicht sauber verdrahtet ist)
+             p.flags = 0x02;
  
-             // TODO: Trafo RMS values are not wired in the uploaded files.
-             // Set to 0 for now; patch once we know the authoritative source.
-             p.vA10 = 0;
-             p.vB10 = 0;
+             // Spannungen bei invalid konsequent auf 0xFFFF setzen (kein Drift-/Floating-Müll im Payload)
+             p.vA10 = 0xFFFF;
+             p.vB10 = 0xFFFF;
  
-             // Currents:
-             // We currently don't have an mA conversion source in the provided files.
-             // As a safe compile-time placeholder, we reuse BlockStatus.stromRaw (ADC).
-             // This gives you "changing numbers" in the UI immediately; calibration can follow.
-             BlockStatus blocks[M2_NUM_BLOCKS]{};
-             buildMega2BlockStatus(blocks, blockController);
+             
              for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++)
              {
-                 p.i_mA[i] = blocks[i].stromRaw; // placeholder
+                 // Authoritative source: gefilterter Strom in mA aus BlockController
+                 int32_t mA = (int32_t)blockController.stromFiltered(i);
+                 if (mA < 0) mA = 0;
+                 if (mA > 5000) mA = 5000; // Plausibilitätsgrenze (UI erwartet typ. <= ~1500)
+                 p.i_mA[i] = (uint16_t)mA;
              }
  
              Wire.write(reinterpret_cast<uint8_t*>(&p), sizeof(p));

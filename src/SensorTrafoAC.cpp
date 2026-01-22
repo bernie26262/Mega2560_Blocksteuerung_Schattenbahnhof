@@ -36,6 +36,8 @@ void SensorTrafoAC::update(uint32_t now)
     m_maxSample = 0;
     m_sampleCount = 0;
     m_lastCalc = now;
+
+
 }
 
 void SensorTrafoAC::printDebug(const char* label) const

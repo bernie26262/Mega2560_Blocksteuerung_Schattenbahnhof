@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
+// HINWEIS: Command-IDs müssen 1:1 mit Mega2Command übereinstimmen (siehe unten).
 // =====================================================
 //  Anlagen-Konstanten (fix)
 // =====================================================
@@ -27,6 +28,7 @@ constexpr uint8_t M2_NUM_SHADOW_TRACKS = 3;  // SBhf-Gleise
 // =====================================================
 //  I2C Commands (ESP -> Mega2)
 // =====================================================
+// Legacy-Namen (M2_CMD_*) – bitte keine neuen IDs hier ergänzen; stattdessen Mega2Command nutzen.
 enum : uint8_t
 {
     // --- Safety / Recovery ---
@@ -122,6 +124,7 @@ struct ShadowYardStatus
     uint8_t state;              // interner Automat (nur Anzeige)
 };
 
+// Canonical command enum (Mega2 uses these symbols)
 enum Mega2Command : uint8_t {
     CMD_GET_M2_SAFETY = 0x20,
     CMD_GET_M2_BLOCKS = 0x21,
