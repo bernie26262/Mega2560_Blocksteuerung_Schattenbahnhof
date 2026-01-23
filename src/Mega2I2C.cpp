@@ -1,4 +1,6 @@
 #include <Wire.h>
+#include <Arduino.h>
+#include <string.h>
 
 #include "BlockController.h"
 #include "ShadowYardController.h"
@@ -13,6 +15,10 @@
 #include "mega2_debug.h"
  
 // Analog payload (fixed point): see proto_common.h Mega2AnalogPayload
+// ------------------------------------------------------------
+// DataReady (Mega2 -> ESP): active LOW, latched until a digital read is served
+// ------------------------------------------------------------
+constexpr uint8_t PIN_DATA_READY_M2 = 12;
 
 // ------------------------------------------------------------
 // Externe Controller aus main.cpp
@@ -49,13 +55,119 @@ static bool isNeighbor(uint8_t fromBlock, uint8_t toBlock)
     return false;
 }
 
+// ------------------------------------------------------------
+// Helper: Entry matrices (shared by onRequest + DRDY change-scan)
+// ------------------------------------------------------------
+static void buildEntryMatrix(uint16_t entry[M2_NUM_BLOCKS])
+{
+    // Antwort: uint16_t[M2_NUM_BLOCKS] (FROM->TO bitmask)
+    // Index: from-1; Bit(to-1)=1 => Einfahrt erlaubt
+    for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++) entry[i] = 0;
+
+    for (uint8_t from = 1; from <= M2_NUM_BLOCKS; from++)
+    {
+        uint16_t mask = 0;
+        for (uint8_t to = 1; to <= M2_NUM_BLOCKS; to++)
+        {
+            if (!isNeighbor(from, to))
+                continue;
+
+            if (blockController.canEnter(from, to))
+                mask |= (1u << (to - 1));
+        }
+        entry[from - 1] = mask;
+    }
+}
+
+static void buildEntryPreviewMatrix(uint16_t entry[M2_NUM_BLOCKS])
+{
+    // Antwort: uint16_t[M2_NUM_BLOCKS] (FROM->TO bitmask)
+    // Semantik: "prinzipiell möglich" (Preview) – Topologie + Ziel frei + keine globale Safety-Sperre
+    for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++) entry[i] = 0;
+
+    // Globaler Lock -> alles rot
+    if (safetyIsLocked())
+        return;
+
+    for (uint8_t from = 1; from <= M2_NUM_BLOCKS; from++)
+    {
+        uint16_t mask = 0;
+        for (uint8_t to = 1; to <= M2_NUM_BLOCKS; to++)
+        {
+            if (!isNeighbor(from, to))
+                continue;
+
+            // Preview ignoriert Speziallogik wie entryGranted() (z.B. Block4 Merge)
+            // und fragt nur: "Zielblock frei?"
+            if (!blockController.isOccupied(to))
+                mask |= (1u << (to - 1));
+        }
+        entry[from - 1] = mask;
+    }
+}
+
+
 static bool    s_cmdResponsePending = false;
 static uint8_t s_cmdResponseOk      = 0;
 static uint8_t s_pendingResponse    = 0;
 static uint8_t s_analogSeq          = 0;
+static bool    s_drdyActiveLow      = false;
+
+// Pending mask for DRDY-driven digital payloads (see proto_common.h M2_PEND_*)
+static volatile uint16_t s_pendingMask = 0;
+static uint8_t           s_pendingSeq  = 0;
 
 // Selftest-Retry darf NICHT im I2C-Callback gestartet werden (kann onRequest verhungern lassen)
 static volatile bool s_pendingSelftestRetry = false;
+
+static inline void drdySetLow()
+{
+    if (!s_drdyActiveLow)
+    {
+        digitalWrite(PIN_DATA_READY_M2, LOW);
+        s_drdyActiveLow = true;
+    }
+}
+
+static inline void drdySetHigh()
+{
+    if (s_drdyActiveLow)
+    {
+        digitalWrite(PIN_DATA_READY_M2, HIGH);
+        s_drdyActiveLow = false;
+    }
+}
+
+
+// ------------------------------------------------------------
+// Pending-mask helpers (digital-only; DRDY stays LOW while mask!=0)
+// ------------------------------------------------------------
+static inline void pendingSet(uint16_t bits)
+{
+    if (bits == 0) return;
+    s_pendingMask |= bits;
+    drdySetLow();
+}
+
+static inline void pendingClear(uint16_t bits)
+{
+    if (bits == 0) return;
+    s_pendingMask &= (uint16_t)~bits;
+    if (s_pendingMask == 0)
+        drdySetHigh();
+}
+
+// Optional public hook for future use (keeps changes local to this module)
+void megaI2C_setPending(uint16_t bits)
+{
+    pendingSet(bits);
+}
+
+// Backward compatible helper: mark all digital payloads as pending
+void megaI2C_markDataReady()
+{
+    pendingSet(M2_PEND_ALL_DIGITAL);
+}
 
 // ------------------------------------------------------------
 // I2C Receive (Master → Slave)
@@ -82,6 +194,9 @@ void i2cOnReceive(int len)
         const uint8_t on = Wire.read();
         safetySetEmergency(on != 0);
 
+        // Digital state changed -> mark safety pending (DRDY active LOW)
+        pendingSet(M2_PEND_SAFETY);
+
         s_cmdResponseOk      = 1;
         s_cmdResponsePending = true;
         return;
@@ -97,6 +212,9 @@ void i2cOnReceive(int len)
 
         bool ok = safetyResetEmergency();
 
+        // Digital state may change -> mark safety pending (DRDY active LOW)
+        pendingSet(M2_PEND_SAFETY);
+
         s_cmdResponseOk      = ok ? 1 : 0;
         s_cmdResponsePending = true;
         return;
@@ -110,6 +228,10 @@ void i2cOnReceive(int len)
         // WICHTIG: NICHT hier startSelftest() aufrufen (I2C onReceive ist timingkritisch).
         // Wir quittieren sofort und starten den Selftest später im loop-Kontext.
         s_pendingSelftestRetry = true;
+        
+        // Digital state will change soon -> mark relevant payloads pending (DRDY active LOW)
+        pendingSet(M2_PEND_SHADOW | M2_PEND_ENTRY | M2_PEND_ENTRY_PREV | M2_PEND_SAFETY);
+
         s_cmdResponseOk      = 1;
         s_cmdResponsePending = true;
         return;
@@ -170,6 +292,10 @@ void i2cOnReceive(int len)
     if (cmd == M2_CMD_POWER_ON)
     {
         const bool ok = safetyPowerOn();
+        
+        // Digital state may change -> mark safety pending (DRDY active LOW)
+        pendingSet(M2_PEND_SAFETY);
+
         s_cmdResponseOk      = ok ? 1 : 0;
         s_cmdResponsePending = true;
         return;
@@ -179,6 +305,8 @@ void i2cOnReceive(int len)
     // Bestehende GET-Kommandos
     // --------------------------------------------------
     s_pendingResponse = cmd;
+    
+    // Keine DRDY-Aktion hier: GET ist nur "Abholen".
 }
 
 // ------------------------------------------------------------
@@ -193,6 +321,12 @@ void i2cOnRequest()
     {
         Wire.write(&s_cmdResponseOk, 1);
         s_cmdResponsePending = false;
+
+        // A command was just processed; the master has "seen" us.
+        // We clear DRDY here to avoid a stuck-low line on pure command/ACK flows.
+        // (Master will also do digital GETs shortly after.)
+        if (s_pendingMask == 0) drdySetHigh();
+        
         return;
     }
 
@@ -209,6 +343,10 @@ void i2cOnRequest()
         SystemStatus st{};
         buildMega2SystemStatus(st);
         Wire.write(reinterpret_cast<uint8_t*>(&st), sizeof(st));
+
+        // SystemStatus is a "digital snapshot" -> clear all pending digital bits after serving it
+        pendingClear(M2_PEND_ALL_DIGITAL);
+        
         return;
     }
 
@@ -222,6 +360,7 @@ void i2cOnRequest()
             Mega2SafetyStatus st{};
             buildMega2SafetyStatus(st);
             Wire.write(reinterpret_cast<uint8_t*>(&st), sizeof(st));
+            pendingClear(M2_PEND_SAFETY);
             break;
         }
 
@@ -230,6 +369,7 @@ void i2cOnRequest()
             BlockStatus blocks[M2_NUM_BLOCKS]{};
             buildMega2BlockStatus(blocks, blockController);
             Wire.write(reinterpret_cast<uint8_t*>(blocks), sizeof(blocks));
+            pendingClear(M2_PEND_BLOCKS);
             break;
         }
 
@@ -238,6 +378,7 @@ void i2cOnRequest()
             ShadowYardStatus st{};
             buildMega2ShadowStatus(st, shadowController);
             Wire.write(reinterpret_cast<uint8_t*>(&st), sizeof(st));
+            pendingClear(M2_PEND_SHADOW);   
             break;
         }
          
@@ -263,63 +404,44 @@ void i2cOnRequest()
              }
  
              Wire.write(reinterpret_cast<uint8_t*>(&p), sizeof(p));
+
+            // IMPORTANT: analog does NOT clear DRDY (digital-only signal)
+             
              break;
          }
+         case CMD_GET_M2_PENDING_MASK:
+        {
+            Mega2PendingMaskPayload p{};
+            p.seq  = ++s_pendingSeq;
+            p.rsv0 = 0;
+            p.mask = (uint16_t)s_pendingMask;
+            Wire.write(reinterpret_cast<uint8_t*>(&p), sizeof(p));
+
+            // IMPORTANT: pending-mask read does NOT clear DRDY / pending bits.
+            break;
+        }
 
         
 case CMD_GET_M2_ENTRY:
 {
-    // Antwort: uint16_t[M2_NUM_BLOCKS] (FROM->TO bitmask)
-    // Index: from-1; Bit(to-1)=1 => Einfahrt erlaubt
+
     uint16_t entry[M2_NUM_BLOCKS]{};
-    for (uint8_t from = 1; from <= M2_NUM_BLOCKS; from++)
-    {
-        uint16_t mask = 0;
-        for (uint8_t to = 1; to <= M2_NUM_BLOCKS; to++)
-        {
-            if (!isNeighbor(from, to))
-                continue;
 
-            if (blockController.canEnter(from, to))
-                mask |= (1u << (to - 1));
-        }
-        entry[from - 1] = mask;
-    }
-
+    buildEntryMatrix(entry);
     Wire.write(reinterpret_cast<uint8_t*>(entry), sizeof(entry));
+    pendingClear(M2_PEND_ENTRY);
     break;
 }
 
 case CMD_GET_M2_ENTRY_PREVIEW:
 {
-    // Antwort: uint16_t[M2_NUM_BLOCKS] (FROM->TO bitmask)
-    // Semantik: "prinzipiell möglich" (Preview) – Topologie + Ziel frei + keine globale Safety-Sperre
+
     uint16_t entry[M2_NUM_BLOCKS]{};
 
-    // Globaler Lock -> alles rot
-    if (safetyIsLocked())
-    {
-        Wire.write(reinterpret_cast<uint8_t*>(entry), sizeof(entry));
-        break;
-    }
 
-    for (uint8_t from = 1; from <= M2_NUM_BLOCKS; from++)
-    {
-        uint16_t mask = 0;
-        for (uint8_t to = 1; to <= M2_NUM_BLOCKS; to++)
-        {
-            if (!isNeighbor(from, to))
-                continue;
-
-            // Preview ignoriert Speziallogik wie entryGranted() (z.B. Block4 Merge)
-            // und fragt nur: "Zielblock frei?"
-            if (!blockController.isOccupied(to))
-                mask |= (1u << (to - 1));
-        }
-        entry[from - 1] = mask;
-    }
-
+    buildEntryPreviewMatrix(entry);
     Wire.write(reinterpret_cast<uint8_t*>(entry), sizeof(entry));
+    pendingClear(M2_PEND_ENTRY_PREV);
     break;
 }
 
@@ -329,6 +451,7 @@ case CMD_GET_M2_ENTRY_PREVIEW:
                 SystemStatus st{};
                 buildMega2SystemStatus(st);
                 Wire.write(reinterpret_cast<uint8_t*>(&st), sizeof(st));
+                pendingClear(M2_PEND_ALL_DIGITAL);
             }
             break;
     }
@@ -344,6 +467,11 @@ void megaI2C_begin()
     Wire.begin(0x11);   // Mega2-Adresse
     Wire.onReceive(i2cOnReceive);
     Wire.onRequest(i2cOnRequest);
+
+    // DRDY pin init: idle HIGH (not ready), active LOW (data ready)
+    pinMode(PIN_DATA_READY_M2, OUTPUT);
+    digitalWrite(PIN_DATA_READY_M2, HIGH);
+    s_drdyActiveLow = false;
 }
 
 // ------------------------------------------------------------
@@ -367,6 +495,64 @@ void megaI2C_update()
                                 (unsigned)safetyIsEmergencyActive(),
                                 (unsigned)shadowController.warningMask(),
                                 (unsigned)shadowController.allowedGleisMask());
+    }
+
+    
+    // ------------------------------------------------------------
+    // DRDY change scan (digital payloads): if anything changed -> DRDY LOW
+    // This makes updates event-driven without touching controller internals.
+    // ------------------------------------------------------------
+    static uint32_t s_scanMs = 0;
+    const uint32_t now = millis();
+    if ((uint32_t)(now - s_scanMs) < 50) return; // 20 Hz is enough
+    s_scanMs = now;
+
+    static bool s_hasLast = false;
+    static Mega2SafetyStatus s_lastSafety{};
+    static BlockStatus       s_lastBlocks[M2_NUM_BLOCKS]{};
+    static ShadowYardStatus  s_lastSbh{};
+    static uint16_t          s_lastEntry[M2_NUM_BLOCKS]{};
+    static uint16_t          s_lastPreview[M2_NUM_BLOCKS]{};
+
+    Mega2SafetyStatus curSafety{};
+    BlockStatus       curBlocks[M2_NUM_BLOCKS]{};
+    ShadowYardStatus  curSbh{};
+    uint16_t          curEntry[M2_NUM_BLOCKS]{};
+    uint16_t          curPreview[M2_NUM_BLOCKS]{};
+
+    buildMega2SafetyStatus(curSafety);
+    buildMega2BlockStatus(curBlocks, blockController);
+    buildMega2ShadowStatus(curSbh, shadowController);
+    buildEntryMatrix(curEntry);
+    buildEntryPreviewMatrix(curPreview);
+
+    if (!s_hasLast)
+    {
+        s_lastSafety = curSafety;
+        memcpy(s_lastBlocks,  curBlocks,  sizeof(curBlocks));
+        s_lastSbh = curSbh;
+        memcpy(s_lastEntry,   curEntry,   sizeof(curEntry));
+        memcpy(s_lastPreview, curPreview, sizeof(curPreview));
+        s_hasLast = true;
+        return;
+    }
+
+    const uint16_t bits =
+        ((memcmp(&s_lastSafety, &curSafety, sizeof(curSafety)) != 0) ? M2_PEND_SAFETY     : 0) |
+        ((memcmp( s_lastBlocks,  curBlocks, sizeof(curBlocks)) != 0) ? M2_PEND_BLOCKS     : 0) |
+        ((memcmp(&s_lastSbh,    &curSbh,    sizeof(curSbh))    != 0) ? M2_PEND_SHADOW     : 0) |
+        ((memcmp( s_lastEntry,   curEntry,  sizeof(curEntry))  != 0) ? M2_PEND_ENTRY      : 0) |
+        ((memcmp( s_lastPreview, curPreview,sizeof(curPreview))!= 0) ? M2_PEND_ENTRY_PREV : 0);
+
+    if (bits)
+    {
+        s_lastSafety = curSafety;
+        memcpy(s_lastBlocks,  curBlocks,  sizeof(curBlocks));
+        s_lastSbh = curSbh;
+        memcpy(s_lastEntry,   curEntry,   sizeof(curEntry));
+        memcpy(s_lastPreview, curPreview, sizeof(curPreview));
+
+        pendingSet(bits);
     }
 }
 
