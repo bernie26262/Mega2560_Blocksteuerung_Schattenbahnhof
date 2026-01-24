@@ -520,24 +520,35 @@ void megaI2C_update()
     static bool s_hasLast = false;
     static Mega2SafetyStatus s_lastSafety{};
     static BlockStatus       s_lastBlocks[M2_NUM_BLOCKS]{};
+    static uint8_t           s_lastBlockFlags[M2_NUM_BLOCKS]{}; // digital-only flags (no stromRaw noise)
     static ShadowYardStatus  s_lastSbh{};
     static uint16_t          s_lastEntry[M2_NUM_BLOCKS]{};
     static uint16_t          s_lastPreview[M2_NUM_BLOCKS]{};
-    static uint16_t          s_lastOccMask = 0;
+    static uint16_t          s_lastOccMask = 0; // stable occupiedMask (digital)
     static uint16_t          s_lastTurnoutSoll = 0;
     static uint16_t          s_lastTurnoutIst  = 0;
 
     Mega2SafetyStatus curSafety{};
     BlockStatus       curBlocks[M2_NUM_BLOCKS]{};
+    uint8_t           curBlockFlags[M2_NUM_BLOCKS]{}; // digital-only flags (no stromRaw noise)
     ShadowYardStatus  curSbh{};
     uint16_t          curEntry[M2_NUM_BLOCKS]{};
     uint16_t          curPreview[M2_NUM_BLOCKS]{};
-    const uint16_t curOccMask      = g_systemStatus.blockOccupiedMask;
+    const uint16_t curOccMask      = g_systemStatus.blockOccupiedMask; // stable occupied mask
     const uint16_t curTurnoutSoll  = g_systemStatus.turnoutSollMask;
     const uint16_t curTurnoutIst   = g_systemStatus.turnoutIstMask;
 
     buildMega2SafetyStatus(curSafety);
     buildMega2BlockStatus(curBlocks, blockController);
+    for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++)
+    {
+        // DRDY-digitale Blocks: nur stabile/digitale Flags (kein Analog-Jitter)
+        // - stromEin/besetzt hängen typischerweise an stromRaw -> kann rauschen -> DRDY bleibt sonst dauernd LOW
+        curBlockFlags[i] = (uint8_t)((curBlocks[i].kontakt     ? 1u  : 0u) |
+                                     (curBlocks[i].kurzschluss ? 2u  : 0u) |
+                                     (curBlocks[i].nothalt     ? 4u  : 0u));
+    }
+
     buildMega2ShadowStatus(curSbh, shadowController);
     buildEntryMatrix(curEntry);
     buildEntryPreviewMatrix(curPreview);
@@ -546,6 +557,7 @@ void megaI2C_update()
     {
         s_lastSafety = curSafety;
         memcpy(s_lastBlocks,  curBlocks,  sizeof(curBlocks));
+        memcpy(s_lastBlockFlags, curBlockFlags, sizeof(curBlockFlags));
         s_lastSbh = curSbh;
         memcpy(s_lastEntry,   curEntry,   sizeof(curEntry));
         memcpy(s_lastPreview, curPreview, sizeof(curPreview));
@@ -558,17 +570,18 @@ void megaI2C_update()
 
     const uint16_t bits =
         ((memcmp(&s_lastSafety, &curSafety, sizeof(curSafety)) != 0) ? M2_PEND_SAFETY     : 0) |
-        ((memcmp( s_lastBlocks,  curBlocks, sizeof(curBlocks)) != 0) ? M2_PEND_BLOCKS     : 0) |
+        ((memcmp( s_lastBlockFlags, curBlockFlags, sizeof(curBlockFlags)) != 0) ? M2_PEND_BLOCKS : 0) |
+        ((s_lastOccMask != curOccMask) ? M2_PEND_BLOCKS : 0) |
         ((memcmp(&s_lastSbh,    &curSbh,    sizeof(curSbh))    != 0) ? M2_PEND_SHADOW     : 0) |
         ((memcmp( s_lastEntry,   curEntry,  sizeof(curEntry))  != 0) ? M2_PEND_ENTRY      : 0) |
         ((memcmp( s_lastPreview, curPreview,sizeof(curPreview))!= 0) ? M2_PEND_ENTRY_PREV : 0) |
-        ((s_lastOccMask != curOccMask) ? M2_PEND_BLOCKS : 0) |
         (((s_lastTurnoutSoll != curTurnoutSoll) || (s_lastTurnoutIst != curTurnoutIst)) ? M2_PEND_TURNOUTS : 0);
 
     if (bits)
     {
         s_lastSafety = curSafety;
         memcpy(s_lastBlocks,  curBlocks,  sizeof(curBlocks));
+        memcpy(s_lastBlockFlags, curBlockFlags, sizeof(curBlockFlags));
         s_lastSbh = curSbh;
         memcpy(s_lastEntry,   curEntry,   sizeof(curEntry));
         memcpy(s_lastPreview, curPreview, sizeof(curPreview));
@@ -579,4 +592,6 @@ void megaI2C_update()
         pendingSet(bits);
     }
 }
+
+
 

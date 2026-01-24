@@ -137,7 +137,7 @@ enum : uint16_t {
     M2_PEND_ENTRY_PREV   = 1u << 2,
     M2_PEND_BLOCKS       = 1u << 3,
     M2_PEND_SHADOW       = 1u << 4,
-    M2_PEND_TURNOUTS     = 1u << 5,  // reserved (future)
+    M2_PEND_TURNOUTS     = 1u << 5,  // Turnouts IST/SOLL (SBHF)
 
     M2_PEND_ALL_DIGITAL  = M2_PEND_SAFETY | M2_PEND_ENTRY | M2_PEND_ENTRY_PREV | M2_PEND_BLOCKS | M2_PEND_SHADOW | M2_PEND_TURNOUTS,
 };
