@@ -373,6 +373,16 @@ void i2cOnRequest()
             break;
         }
 
+        case CMD_GET_M2_TURNOUTS:
+        {
+            Mega2TurnoutsPayload t{};
+            t.sollMask = g_systemStatus.turnoutSollMask;
+            t.istMask  = g_systemStatus.turnoutIstMask;
+            Wire.write(reinterpret_cast<uint8_t*>(&t), sizeof(t));
+            pendingClear(M2_PEND_TURNOUTS);
+            break;
+        }
+
         case CMD_GET_M2_SBH:
         {
             ShadowYardStatus st{};
@@ -513,12 +523,18 @@ void megaI2C_update()
     static ShadowYardStatus  s_lastSbh{};
     static uint16_t          s_lastEntry[M2_NUM_BLOCKS]{};
     static uint16_t          s_lastPreview[M2_NUM_BLOCKS]{};
+    static uint16_t          s_lastOccMask = 0;
+    static uint16_t          s_lastTurnoutSoll = 0;
+    static uint16_t          s_lastTurnoutIst  = 0;
 
     Mega2SafetyStatus curSafety{};
     BlockStatus       curBlocks[M2_NUM_BLOCKS]{};
     ShadowYardStatus  curSbh{};
     uint16_t          curEntry[M2_NUM_BLOCKS]{};
     uint16_t          curPreview[M2_NUM_BLOCKS]{};
+    const uint16_t curOccMask      = g_systemStatus.blockOccupiedMask;
+    const uint16_t curTurnoutSoll  = g_systemStatus.turnoutSollMask;
+    const uint16_t curTurnoutIst   = g_systemStatus.turnoutIstMask;
 
     buildMega2SafetyStatus(curSafety);
     buildMega2BlockStatus(curBlocks, blockController);
@@ -533,6 +549,9 @@ void megaI2C_update()
         s_lastSbh = curSbh;
         memcpy(s_lastEntry,   curEntry,   sizeof(curEntry));
         memcpy(s_lastPreview, curPreview, sizeof(curPreview));
+        s_lastOccMask = curOccMask;
+        s_lastTurnoutSoll = curTurnoutSoll;
+        s_lastTurnoutIst  = curTurnoutIst;
         s_hasLast = true;
         return;
     }
@@ -542,7 +561,9 @@ void megaI2C_update()
         ((memcmp( s_lastBlocks,  curBlocks, sizeof(curBlocks)) != 0) ? M2_PEND_BLOCKS     : 0) |
         ((memcmp(&s_lastSbh,    &curSbh,    sizeof(curSbh))    != 0) ? M2_PEND_SHADOW     : 0) |
         ((memcmp( s_lastEntry,   curEntry,  sizeof(curEntry))  != 0) ? M2_PEND_ENTRY      : 0) |
-        ((memcmp( s_lastPreview, curPreview,sizeof(curPreview))!= 0) ? M2_PEND_ENTRY_PREV : 0);
+        ((memcmp( s_lastPreview, curPreview,sizeof(curPreview))!= 0) ? M2_PEND_ENTRY_PREV : 0) |
+        ((s_lastOccMask != curOccMask) ? M2_PEND_BLOCKS : 0) |
+        (((s_lastTurnoutSoll != curTurnoutSoll) || (s_lastTurnoutIst != curTurnoutIst)) ? M2_PEND_TURNOUTS : 0);
 
     if (bits)
     {
@@ -551,6 +572,9 @@ void megaI2C_update()
         s_lastSbh = curSbh;
         memcpy(s_lastEntry,   curEntry,   sizeof(curEntry));
         memcpy(s_lastPreview, curPreview, sizeof(curPreview));
+        s_lastOccMask = curOccMask;
+        s_lastTurnoutSoll = curTurnoutSoll;
+        s_lastTurnoutIst  = curTurnoutIst;
 
         pendingSet(bits);
     }

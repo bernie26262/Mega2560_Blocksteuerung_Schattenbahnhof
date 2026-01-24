@@ -149,6 +149,13 @@ struct __attribute__((packed)) Mega2PendingMaskPayload
     uint16_t mask;  // M2_PEND_* bits
 };
 
+struct __attribute__((packed)) Mega2TurnoutsPayload
+{
+    uint16_t sollMask;
+    uint16_t istMask;
+};
+
+
 
 // Canonical command enum (Mega2 uses these symbols)
 enum Mega2Command : uint8_t {
@@ -159,5 +166,6 @@ enum Mega2Command : uint8_t {
     CMD_GET_M2_ENTRY_PREVIEW = 0x24,
     CMD_GET_M2_ANALOG = 0x25,
     CMD_GET_M2_PENDING_MASK = 0x26,
+    CMD_GET_M2_TURNOUTS     = 0x27,
 };
 
