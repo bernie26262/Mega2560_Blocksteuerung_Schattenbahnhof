@@ -23,6 +23,10 @@ void safetySetEmergency(bool active);
 // B3.1: explizite Quittierung
 bool safetyResetEmergency();
 
+// SBHF Weichenfehler: wenn Selftest über I2C/UI gestartet wird,
+// muss Safety wissen, dass Selftest-Auswertung nach Abschluss erfolgen soll.
+void safetyNotifySbhfSelftestStarted();
+
 // Hardware-nahe Aktion
 void safetySetSSR(SafetySSR ssr, bool enable);
 

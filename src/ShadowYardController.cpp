@@ -587,14 +587,14 @@ void ShadowYardController::setWarningForWeiche(uint8_t weicheId)
     }
 }
 
-bool ShadowYardController::startSelftestImpl(bool includeNonCritical, bool allowFromCleanIdle)
+bool ShadowYardController::startSelftestImpl(bool includeNonCritical, bool allowFromCleanIdle, bool allowDuringEmergency)
 {
     // HART: niemals parallel
     if (m_selftestActive)
         return false;
 
     // HART: niemals bei aktivem HW-NOT-AUS
-    if (safetyIsEmergencyActive())
+    if (safetyIsEmergencyActive() && !allowDuringEmergency)
         return false;
 
     // Safety-Lock: im Normalbetrieb sperren, aber für Startup-Checklist Selftest erlauben
@@ -683,14 +683,32 @@ bool ShadowYardController::startSelftestImpl(bool includeNonCritical, bool allow
 bool ShadowYardController::startSelftest(bool includeNonCritical)
 {
     // normaler Flow: Idle nur wenn Warnungen/Restriktionen vorliegen
-    return startSelftestImpl(includeNonCritical, false);
+    return startSelftestImpl(includeNonCritical, false, false);
 }
 
 bool ShadowYardController::startSelftestStartup(bool includeNonCritical)
 {
     // Startup-Checklist: erlaubt Start auch aus sauberem Idle (z.B. Boot-ERR)
-    return startSelftestImpl(includeNonCritical, true);
+    return startSelftestImpl(includeNonCritical, true, false);
 }
+
+bool ShadowYardController::startSelftestRetry(bool includeNonCritical)
+{
+    // UI Retry (nach Weichenfehler) darf auch unter NOTAUS/LOCK starten,
+    // sonst entsteht ein Deadlock (ACK blockt Selftest, Selftest blockt ACK).
+    // Wir erlauben das aber nur, wenn tatsächlich ein Weichen-Defekt-Warning aktiv ist.
+    const uint8_t weicheWarn =
+        SBHF_WARN_W12_DEFECT |
+        SBHF_WARN_W13_DEFECT |
+        SBHF_WARN_W14_DEFECT |
+        SBHF_WARN_W15_DEFECT;
+
+    if ((m_warningMask & weicheWarn) == 0)
+        return false;
+
+    return startSelftestImpl(includeNonCritical, true, true);
+}
+
 
 void ShadowYardController::selftestUpdate(uint32_t nowMs)
 {

@@ -83,6 +83,11 @@ bool startSelftest(bool includeNonCritical = true);
 // aber weiterhin NICHT bei aktivem HW-Notaus / Safety-Lock / wenn Selftest bereits läuft.
 bool startSelftestStartup(bool includeNonCritical = true);
 
+// UI Retry nach SBHF-Weichenfehler:
+// Muss auch dann starten dürfen, wenn Safety gerade NOTAUS/LOCK aktiv hat,
+// weil genau dieser Fehler sonst nicht auflösbar ist.
+bool startSelftestRetry(bool includeNonCritical = true);
+
 bool isSelftestActive() const { return m_selftestActive; }
 bool isSelftestDone()   const { return m_selftestDone; }
 void clearSelftestDone() { m_selftestDone = false; }
@@ -147,7 +152,7 @@ bool isCriticalWeiche(uint8_t weicheId) const;
 
 // Shared implementation:
 // allowFromCleanIdle=true => Idle-Start auch ohne Warnungen/Restriktionen (Startup-Checklist)
-bool startSelftestImpl(bool includeNonCritical, bool allowFromCleanIdle);
+bool startSelftestImpl(bool includeNonCritical, bool allowFromCleanIdle, bool allowDuringEmergency);
 
     // --------------------------------------------------------
     // Weichen-Status für Proto (ersetzt g_weichen komplett)

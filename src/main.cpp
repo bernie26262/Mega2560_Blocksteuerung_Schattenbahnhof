@@ -152,6 +152,24 @@ PulseSensor g_s14(PIN_SCHALTGLEIS_S14);
 PulseSensor g_s15(PIN_SCHALTGLEIS_S15);
 PulseSensor g_s16(PIN_SCHALTGLEIS_S16);
 
+// Forward decl: g_sbhf wird weiter unten definiert, aber hier schon benutzt.
+class ShadowYardController;
+extern ShadowYardController g_sbhf;
+
+// --------------------- SCHALTGLEISE -> SBHF DISPATCH -------------------------
+static void sbhfHandleSchaltgleise()
+{
+    // PulseSensor ist flankenbasiert (HIGH->LOW).
+    // Wichtig: muss zyklisch aufgerufen werden, sonst triggert S11..S16 nie.
+    if (g_s11.fellEdge()) { DBG_PRINTLN(F("[SBHF] S11 pulse")); g_sbhf.onS11(); }
+    if (g_s12.fellEdge()) { DBG_PRINTLN(F("[SBHF] S12 pulse")); g_sbhf.onS12(); }
+    if (g_s13.fellEdge()) { DBG_PRINTLN(F("[SBHF] S13 pulse")); g_sbhf.onS13(); }
+    if (g_s14.fellEdge()) { DBG_PRINTLN(F("[SBHF] S14 pulse")); g_sbhf.onS14(); }
+    if (g_s15.fellEdge()) { DBG_PRINTLN(F("[SBHF] S15 pulse")); g_sbhf.onS15(); }
+    if (g_s16.fellEdge()) { DBG_PRINTLN(F("[SBHF] S16 pulse")); g_sbhf.onS16(); }
+}
+
+
 // --------------------- WEICHEN ----------------------------------------------
 SensorKontakt sensorW12(PIN_W12_RM_ABBIEG);
 SensorKontakt sensorW13(PIN_W13_RM_ABBIEG);
@@ -559,6 +577,9 @@ void loop()
 #endif
 
     safetyUpdate();
+
+    // Schaltgleise S11..S16 (flankenbasiert) -> SBHF-Events
+    sbhfHandleSchaltgleise();
 
     if (now - lastBlockUpdate >= BLOCK_UPDATE_MS)
     {

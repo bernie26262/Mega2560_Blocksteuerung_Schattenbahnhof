@@ -330,6 +330,16 @@ bool safetyResetEmergency()
     // ------------------------------------------------------------
     if (err.type == SAFETY_ERR_SBH_WEICHE)
     {
+        // Wenn Selftest bereits läuft (z.B. via UI-Button), nicht blocken,
+        // sondern nur pending setzen und warten bis selftestDone.
+        if (shadowController.isSelftestActive())
+        {
+            s_sbhfSelftestPending = true;
+            s_sbhfSelftestStartMs = millis();
+            DBG_PRINTLN("[SAFETY] ACK accepted (SBH_WEICHE): selftest already running");
+            return true;
+        }
+
         if (!shadowController.startSelftest(true /*include W14/W15*/))
         {
             DBG_PRINTLN("[SAFETY] ACK blocked (SBH_WEICHE): selftest could not start");
@@ -392,6 +402,20 @@ bool safetyResetEmergency()
     return true;
 }
 
+
+void safetyNotifySbhfSelftestStarted()
+{
+    // Nur sinnvoll im Kontext SBHF-Weichenfehler
+    if (safetyErrorGet().type != SAFETY_ERR_SBH_WEICHE)
+        return;
+
+    s_sbhfSelftestPending = true;
+    s_sbhfSelftestStartMs = millis();
+
+    DBG_PRINTLN("[SAFETY] SBHF selftest pending set (external start)");
+}
+
+
 void safetyTriggerBlockShort(uint8_t block)
 {
     (void)block;
@@ -445,7 +469,10 @@ void safetyUpdate()
     // ------------------------------------------------------------
     // SBHF Weichenfehler: Selftest-Auswertung nach ACK
     // ------------------------------------------------------------
-    if (s_sbhfSelftestPending && s_emergencyActive && safetyErrorGet().type == SAFETY_ERR_SBH_WEICHE)
+    // SBHF Weichenfehler: Selftest-Auswertung nach (extern/ACK) gestartetem Selftest.
+    // Nicht zusätzlich an s_emergencyActive koppeln, sonst kann ein Deadlock entstehen,
+    // wenn Emergency/Lock-Zustände zwischendrin anders gesetzt/geresettet wurden.
+    if (s_sbhfSelftestPending && safetyErrorGet().type == SAFETY_ERR_SBH_WEICHE)
     {
         if (shadowController.isSelftestDone())
         {
