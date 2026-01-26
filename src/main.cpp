@@ -509,6 +509,7 @@ static void dbgMaybePrintSysFlags(uint16_t flags)
 // ============================================================================
 void setup()
 {
+    // Mega2560 I2C Pins: SDA=20, SCL=21 (Hardware I2C/TWI)
     // Neue Boot-Instanz signalisieren
     // BootId must change on every reboot so ESP can detect Mega reboots reliably.
     // (Not persistent; "random per boot" is enough.)
@@ -517,7 +518,30 @@ void setup()
     DBG_BEGIN(115200);
     while (!Serial && millis() < 1000) {}
 
+    // --------------------------------------------------------------------
+    // DEFENSIVE I2C BUS RELEASE (wichtig bei "SCL hängt LOW beim gemeinsamen Boot")
+    // - garantiert: wir treiben SDA/SCL NICHT aktiv LOW
+    // - Pullups helfen, dass der Bus früh sauber HIGH ist
+    // --------------------------------------------------------------------
+    pinMode(20, INPUT_PULLUP); // SDA
+    pinMode(21, INPUT_PULLUP); // SCL
+
     safetyBegin();
+
+    // --------------------------------------------------------------------
+    // IMPORTANT: ESP polls SystemStatus immediately after boot.
+    // If we enable I2C before building g_systemStatus at least once,
+    // the first read can return uninitialized bytes. The ESP then rejects
+    // the packet (e.g. ver=2/size=4/node=0) and marks Mega2 offline.
+    //
+    // Therefore: build a valid status once BEFORE megaI2C_begin().
+    // --------------------------------------------------------------------
+    memset(&g_systemStatus, 0, sizeof(g_systemStatus));
+    buildMega2SystemStatus(g_systemStatus);
+
+    // I2C Slave früh aktivieren, bevor lange Hardware-Inits laufen.
+    megaI2C_begin();
+
 
     // Kontaktgleise
     k_block1.begin(); k_block2.begin(); k_block3.begin();
@@ -548,18 +572,6 @@ void setup()
     g_s11.begin(); g_s12.begin(); g_s13.begin();
     g_s14.begin(); g_s15.begin(); g_s16.begin();
 
-    // --------------------------------------------------------------------
-    // IMPORTANT: ESP polls SystemStatus immediately after boot.
-    // If we enable I2C before building g_systemStatus at least once,
-    // the first read can return uninitialized bytes. The ESP then rejects
-    // the packet (e.g. ver=2/size=4/node=0) and marks Mega2 offline.
-    //
-    // Therefore: build a valid status once BEFORE megaI2C_begin().
-    // --------------------------------------------------------------------
-    memset(&g_systemStatus, 0, sizeof(g_systemStatus));
-    buildMega2SystemStatus(g_systemStatus);
-
-    megaI2C_begin();
 }
 
 // ============================================================================
