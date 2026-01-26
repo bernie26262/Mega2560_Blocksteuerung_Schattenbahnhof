@@ -2,6 +2,8 @@
 #include <Arduino.h>
 #include <string.h>
 
+extern uint16_t g_bootId;
+
 #include "BlockController.h"
 #include "ShadowYardController.h"
 
@@ -477,6 +479,10 @@ void megaI2C_begin()
     Wire.begin(0x11);   // Mega2-Adresse
     Wire.onReceive(i2cOnReceive);
     Wire.onRequest(i2cOnRequest);
+
+    // One-shot boot log: helps field-debug (no ISR logs)
+    Serial.print(F("[M2I2C] ready addr=0x11 bootId="));
+    Serial.println(g_bootId);
 
     // DRDY pin init: idle HIGH (not ready), active LOW (data ready)
     pinMode(PIN_DATA_READY_M2, OUTPUT);
