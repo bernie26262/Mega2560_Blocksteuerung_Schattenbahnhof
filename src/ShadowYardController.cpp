@@ -52,6 +52,9 @@ void ShadowYardController::begin()
     m_errorActive = false;
     m_exitPowerOn = false;
 
+    // Startup-Checklist Flags: nach jedem Boot deterministisch
+    m_selftestActive = false;
+    m_selftestDone   = false;
 
     m_resumePending = false;
     m_resumeGleis = 0;

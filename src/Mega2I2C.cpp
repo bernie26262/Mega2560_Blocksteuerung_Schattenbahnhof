@@ -121,6 +121,7 @@ static uint8_t           s_pendingSeq  = 0;
 
 // Selftest-Retry darf NICHT im I2C-Callback gestartet werden (kann onRequest verhungern lassen)
 static volatile bool s_pendingSelftestRetry = false;
+static volatile bool s_pendingSelftestStartup = false;
 
 static inline void drdySetLow()
 {
@@ -234,6 +235,19 @@ void i2cOnReceive(int len)
         // Digital state will change soon -> mark relevant payloads pending (DRDY active LOW)
         pendingSet(M2_PEND_SHADOW | M2_PEND_ENTRY | M2_PEND_ENTRY_PREV | M2_PEND_SAFETY);
 
+        s_cmdResponseOk      = 1;
+        s_cmdResponsePending = true;
+        return;
+    }
+    
+    // --------------------------------------------------
+    // SBHF: Selftest startup (Startup-Checklist)
+    // --------------------------------------------------
+    if (cmd == M2_CMD_SBH_SELFTEST_STARTUP)
+    {
+        // NICHT im onReceive starten (timingkritisch) -> später im loop
+        s_pendingSelftestStartup = true;
+        pendingSet(M2_PEND_SHADOW | M2_PEND_ENTRY | M2_PEND_ENTRY_PREV | M2_PEND_SAFETY);
         s_cmdResponseOk      = 1;
         s_cmdResponsePending = true;
         return;
@@ -516,6 +530,27 @@ void megaI2C_update()
                                 (unsigned)safetyIsEmergencyActive(),
                                 (unsigned)shadowController.warningMask(),
                                 (unsigned)shadowController.allowedGleisMask());
+    }
+
+    if (s_pendingSelftestStartup)
+    {
+        s_pendingSelftestStartup = false;
+
+        // Startup-Checklist Selftest: darf auch bei lock=1 starten, aber NICHT bei aktivem HW-Notaus
+        const bool started = shadowController.startSelftestStartup(true);
+        if (started)
+        {
+            DBG_PRINTLN("[I2C] SBHF selftest startup started");
+            safetyNotifySbhfSelftestStarted();
+        }
+        else
+            DBG_PRINTF("[I2C] SBHF selftest startup rejected: state=%u selftestActive=%u lock=%u notaus=%u warn=0x%02X allow=0x%02X\n",
+                       (unsigned)shadowController.state(),
+                       (unsigned)shadowController.isSelftestActive(),
+                       (unsigned)safetyIsLocked(),
+                       (unsigned)safetyIsEmergencyActive(),
+                       (unsigned)shadowController.warningMask(),
+                       (unsigned)shadowController.allowedGleisMask());
     }
 
     

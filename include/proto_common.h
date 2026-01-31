@@ -37,6 +37,7 @@ enum : uint8_t
     M2_CMD_ACK_ERROR          = 0x12, // [cmd, mask]
     M2_CMD_POWER_ON           = 0x13,   // explizit: Leistung EIN
     M2_CMD_SBH_SELFTEST_RETRY  = 0x14, // [cmd] -> 0/1 (start SBHF selftest again)
+    M2_CMD_SBH_SELFTEST_STARTUP = 0x15, // [cmd] -> 0/1 (start SBHF selftest from clean idle; startup-checklist)
 
     // --- Status Abfragen (read-only) ---
     M2_CMD_GET_SAFETY_STATUS  = 0x20, // -> Mega2SafetyStatus
@@ -111,7 +112,7 @@ struct BlockStatus
 // =====================================================
 //  Schattenbahnhof-Status (logischer Überblick)
 // =====================================================
-struct ShadowYardStatus
+struct __attribute__((packed)) ShadowYardStatus
 {
     uint8_t gleisBesetztMask;   // Bit 0..2
     uint8_t kontaktMask;        // Kontaktgleise SBhf
@@ -122,6 +123,10 @@ struct ShadowYardStatus
 
     uint8_t modus;              // 0=seriell, 1=zufall
     uint8_t state;              // interner Automat (nur Anzeige)
+   
+    // Selftest-Flags (für Startup-Checklist)
+    // bit0 = running, bit1 = done
+    uint8_t selftestFlags;
 };
 
 

@@ -49,6 +49,8 @@ void buildMega2SafetyStatus(Mega2SafetyStatus& out)
 void buildMega2BlockStatus(BlockStatus* out,
                            const BlockController& bc)
 {
+    // Wichtig: alle Felder initialisieren, sonst erscheinen im WS/JSON Zufallswerte
+    memset(out, 0, sizeof(BlockStatus) * bc.count());
     for (uint8_t i = 0; i < bc.count(); i++)
     {
         out[i].besetzt  = bc.isOccupied(i);
@@ -62,8 +64,22 @@ void buildMega2BlockStatus(BlockStatus* out,
 void buildMega2ShadowStatus(ShadowYardStatus& out,
                             const ShadowYardController& sy)
 {
+    memset(&out, 0, sizeof(out));
+
     out.state        = static_cast<uint8_t>(sy.state());
     out.ausfahrGleis = sy.ausfahrGleis();
+
+    // Falls noch nicht belegt: 0xFF ist semantisch "keins"
+    out.einfahrGleis = 0xFF;
+
+    // Modus: aktuell nicht nach außen getterbar -> 0 (Sequential) als Default
+    out.modus = 0;
+
+    // Belegung SBHF-Gleise kann später sauber gesetzt werden, wenn gewünscht.
+    // Für Startup-Flags reicht das hier:
+    out.selftestFlags = 0;
+    if (sy.isSelftestActive()) out.selftestFlags |= 0x01;
+    if (sy.isSelftestDone())   out.selftestFlags |= 0x02;
 }
 
 // --------------------------------------------------
@@ -142,8 +158,11 @@ void buildMega2SystemStatus(SystemStatus& out)
 
     // META bits (without protocol bump):
     // 0x80 = SBHF selftest currently running.
+    // 0x40 = SBHF selftest done.
     if (g_sbhf.isSelftestActive())
         out.sbhfOccupiedMask |= 0x80;
+    if (g_sbhf.isSelftestDone())
+        out.sbhfOccupiedMask |= 0x40;
 
     // aktuelles (ausgewähltes) Gleis 1..3 (0 = none)
     out.sbhfCurrentGleis = g_sbhf.ausfahrGleis();

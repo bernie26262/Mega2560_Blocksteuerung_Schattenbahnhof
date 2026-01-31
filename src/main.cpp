@@ -193,14 +193,16 @@ SystemStatus g_systemStatus;
 // ============================================================================
 // TIMER
 // ============================================================================
-uint32_t lastBlockUpdate   = 0;
-uint32_t lastSbhfUpdate    = 0;
-uint32_t lastWeichenUpdate = 0;
-uint32_t lastPayloadUpdate = 0;
+static uint32_t lastBlockUpdate = 0;
+static uint32_t lastSbhfUpdate = 0;
+static uint32_t lastWeichenUpdate = 0;
+static uint32_t lastStromUpdate  = 0;
+static uint32_t lastPayloadUpdate = 0;
 
 static const uint32_t BLOCK_UPDATE_MS   = 20;
 static const uint32_t SBHF_UPDATE_MS    = 10;
 static const uint32_t WEICHEN_UPDATE_MS = 10;
+static const uint32_t STROM_UPDATE_MS   = 20; // ADC-Update für Stromsensoren
 static const uint32_t PAYLOAD_UPDATE_MS = 100;
 
 // ============================================================================
@@ -592,6 +594,16 @@ void loop()
 
     // Schaltgleise S11..S16 (flankenbasiert) -> SBHF-Events
     sbhfHandleSchaltgleise();
+
+    // Stromsensoren (ADC) regelmäßig aktualisieren, damit Block::update() überThreshold() sinnvoll ist
+    if (now - lastStromUpdate >= STROM_UPDATE_MS)
+    {
+        lastStromUpdate = now;
+        strom1.update(); strom2.update(); strom3.update();
+        strom4.update(); strom5.update(); strom6.update();
+        stromSbhf1.update(); stromSbhf2.update(); stromSbhf3.update();
+    }
+
 
     if (now - lastBlockUpdate >= BLOCK_UPDATE_MS)
     {
