@@ -143,6 +143,7 @@ enum : uint16_t {
     M2_PEND_BLOCKS       = 1u << 3,
     M2_PEND_SHADOW       = 1u << 4,
     M2_PEND_TURNOUTS     = 1u << 5,  // Turnouts IST/SOLL (SBHF)
+    M2_PEND_DIAG_SENSORS = 1u << 6,  // Mega2 diag sensor snapshot (kontakt + schaltgleise)
 
     M2_PEND_ALL_DIGITAL  = M2_PEND_SAFETY | M2_PEND_ENTRY | M2_PEND_ENTRY_PREV | M2_PEND_BLOCKS | M2_PEND_SHADOW | M2_PEND_TURNOUTS,
 };
@@ -161,6 +162,30 @@ struct __attribute__((packed)) Mega2TurnoutsPayload
 };
 
 
+// =====================================================
+//  Mega2 Diag Sensors Payload (I2C, <=32 bytes, Wire-safe on AVR)
+//  - kontakt*: 14 Kontakte als Bitmasks (level + sticky rise/fall since last DIAG read)
+//  - schalt*:  S11..S16: level bitmask + cumulative edge counters (uint8 wrap ok)
+//  NOTE: level semantics: 1 = LOW/aktiv (logisch aktiv), 0 = HIGH/inaktiv
+// =====================================================
+static constexpr uint8_t M2_DIAG_NUM_KONTAKTE = 14; // fixed order (see Mega2I2C.cpp)
+static constexpr uint8_t M2_DIAG_NUM_SCHALT   = 6;  // S11..S16
+
+struct __attribute__((packed)) Mega2DiagSensorsPayload
+{
+    uint8_t  seq;
+
+    // Kontakte (14 Bits used)
+    uint16_t kontaktLevelMask; // 1 = aktiv (LOW)
+    uint16_t kontaktRiseMask;  // sticky: 0->1 since last DIAG read
+    uint16_t kontaktFallMask;  // sticky: 1->0 since last DIAG read
+
+    // Schaltgleise S11..S16
+    uint8_t  schaltLevelMask;  // bit0=S11 ... bit5=S16 ; 1=aktiv (LOW)
+    uint8_t  schaltRise[M2_DIAG_NUM_SCHALT]; // cumulative counters (wrap ok)
+    uint8_t  schaltFall[M2_DIAG_NUM_SCHALT]; // cumulative counters (wrap ok)
+};
+static_assert(sizeof(Mega2DiagSensorsPayload) <= 32, "Mega2DiagSensorsPayload must fit Wire buffer");
 
 // Canonical command enum (Mega2 uses these symbols)
 enum Mega2Command : uint8_t {
@@ -172,5 +197,7 @@ enum Mega2Command : uint8_t {
     CMD_GET_M2_ANALOG = 0x25,
     CMD_GET_M2_PENDING_MASK = 0x26,
     CMD_GET_M2_TURNOUTS     = 0x27,
+    CMD_GET_M2_DIAG_SENSORS = 0x28,
+
 };
 

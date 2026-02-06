@@ -11,9 +11,7 @@
 #define MEGA2_DEBUG_BLOCK_EVENTS 0
 #endif
 
-// Entprell-/Stabilitätsfenster (für "wirklich frei")
-static constexpr uint32_t STABLE_FREE_MS    = 500;
-static constexpr uint32_t STABLE_SIGNAL_MS  = 50;
+// Stabilitätsfenster sind in Block.h definiert (Block::STABLE_*)
 
 #if MEGA2_DEBUG && MEGA2_DEBUG_BLOCK_EVENTS
 static inline void dbgPrintBlockEvent(uint8_t id, const __FlashStringHelper* what, bool active)
@@ -129,14 +127,14 @@ bool Block::isReallyFree(uint32_t nowMs) const
     // Wenn nie gesetzt (z.B. direkt nach Boot), nehmen wir "frei" an
     if (m_lastFreeMs == 0) return true;
 
-    if ((nowMs - m_lastFreeMs) < STABLE_FREE_MS)
+    if ((nowMs - m_lastFreeMs) < Block::STABLE_FREE_MS)
         return false;
 
     // Optional: extra Stabilität pro Signal (falls Sensor-Prellen)
-    if (m_lastKontaktHighMs != 0 && (nowMs - m_lastKontaktHighMs) < STABLE_SIGNAL_MS)
+    if (m_lastKontaktHighMs != 0 && (nowMs - m_lastKontaktHighMs) < Block::STABLE_SIGNAL_MS)
         return false;
 
-    if (m_lastStromZeroMs != 0 && (nowMs - m_lastStromZeroMs) < STABLE_SIGNAL_MS)
+    if (m_lastStromZeroMs != 0 && (nowMs - m_lastStromZeroMs) < Block::STABLE_SIGNAL_MS)
         return false;
 
     return true;

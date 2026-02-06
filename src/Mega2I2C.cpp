@@ -7,6 +7,9 @@ extern uint16_t g_bootId;
 #include "BlockController.h"
 #include "ShadowYardController.h"
 
+#include "SensorKontakt.h"
+#include "PulseSensor.h"
+
 #include "proto_common.h"
 #include "proto_mega2.h"
 
@@ -33,6 +36,33 @@ extern ShadowYardController& shadowController;
 // ------------------------------------------------------------
 extern SystemStatus g_systemStatus;
 
+// ------------------------------------------------------------
+// Externe Sensoren aus main.cpp (für Diag-Snapshot)
+// ------------------------------------------------------------
+extern SensorKontakt k_block1;
+extern SensorKontakt k_block2;
+extern SensorKontakt k_block3;
+extern SensorKontakt k_block4;
+extern SensorKontakt k_block5;
+extern SensorKontakt k_block6;
+
+extern SensorKontakt k_sbhf1;
+extern SensorKontakt k_sbhf2;
+extern SensorKontakt k_sbhf3;
+
+extern SensorKontakt k_nothalt;
+
+extern SensorKontakt k_bhf2a;
+extern SensorKontakt k_bhf2b;
+extern SensorKontakt k_bhf4a;
+extern SensorKontakt k_bhf4b;
+
+extern PulseSensor g_s11;
+extern PulseSensor g_s12;
+extern PulseSensor g_s13;
+extern PulseSensor g_s14;
+extern PulseSensor g_s15;
+extern PulseSensor g_s16;
 // ------------------------------------------------------------
 // Interner Command-Response-Zustand
 // ------------------------------------------------------------
@@ -118,6 +148,15 @@ static bool    s_drdyActiveLow      = false;
 // Pending mask for DRDY-driven digital payloads (see proto_common.h M2_PEND_*)
 static volatile uint16_t s_pendingMask = 0;
 static uint8_t           s_pendingSeq  = 0;
+static uint32_t          s_lastDiagReadMs = 0;  // millis of last CMD_GET_M2_DIAG_SENSORS served
+
+// Diag snapshot (kontakt + schaltgleise)
+static Mega2DiagSensorsPayload s_diagSnap{};
+static bool     s_diagHasLast = false;
+static uint16_t s_diagLastKontaktLevel = 0;
+static uint8_t  s_diagLastSchaltLevel  = 0;
+static uint8_t  s_diagLastSchaltRise[M2_DIAG_NUM_SCHALT]{};
+static uint8_t  s_diagLastSchaltFall[M2_DIAG_NUM_SCHALT]{};
 
 // Selftest-Retry darf NICHT im I2C-Callback gestartet werden (kann onRequest verhungern lassen)
 static volatile bool s_pendingSelftestRetry = false;
@@ -152,6 +191,37 @@ static inline void pendingSet(uint16_t bits)
     drdySetLow();
 }
 
+#if MEGA2_DEBUG
+static inline uint8_t diffCountBytes(const void* a, const void* b, size_t n)
+{
+    const uint8_t* pa = (const uint8_t*)a;
+    const uint8_t* pb = (const uint8_t*)b;
+    uint8_t c = 0;
+    for (size_t i=0;i<n;i++) if (pa[i] != pb[i]) c++;
+    return c;
+}
+
+static inline void dbgPrintPendBits(uint16_t bits)
+{
+    DBG_PRINTF("[PEND] bits=0x%04X ", bits);
+    DBG_PRINT(F(" ["));
+    bool first=true;
+    auto add=[&](const __FlashStringHelper* s){
+        if (!first) DBG_PRINT(F("|"));
+        DBG_PRINT(s); first=false;
+    };
+    if (bits & M2_PEND_SAFETY)     add(F("SAFETY"));
+    if (bits & M2_PEND_ENTRY)      add(F("ENTRY"));
+    if (bits & M2_PEND_ENTRY_PREV) add(F("ENTRY_PREV"));
+    if (bits & M2_PEND_BLOCKS)     add(F("BLOCKS"));
+    if (bits & M2_PEND_SHADOW)     add(F("SHADOW"));
+    if (bits & M2_PEND_TURNOUTS)   add(F("TURNOUTS"));
+    if (bits & M2_PEND_DIAG_SENSORS) add(F("DIAG_SENS"));
+    if (first) DBG_PRINT(F("none"));
+    DBG_PRINTLN(F("]"));
+}
+#endif
+
 static inline void pendingClear(uint16_t bits)
 {
     if (bits == 0) return;
@@ -164,6 +234,12 @@ static inline void pendingClear(uint16_t bits)
 void megaI2C_setPending(uint16_t bits)
 {
     pendingSet(bits);
+}
+
+bool megaI2C_diagIsActive()
+{
+    const uint32_t now = (uint32_t)millis();
+    return (uint32_t)(now - s_lastDiagReadMs) < 2000u;
 }
 
 // Backward compatible helper: mark all digital payloads as pending
@@ -447,6 +523,20 @@ void i2cOnRequest()
             break;
         }
 
+        case CMD_GET_M2_DIAG_SENSORS:
+        {
+            // Mark diag as active (so we start latching DRDY for diag-only changes)
+            s_lastDiagReadMs = (uint32_t)millis();
+
+            Wire.write(reinterpret_cast<uint8_t*>(&s_diagSnap), sizeof(s_diagSnap));
+
+            // Clear pending bit + edge-sticky masks after serving the snapshot.
+            pendingClear(M2_PEND_DIAG_SENSORS);
+            s_diagSnap.kontaktRiseMask = 0;
+            s_diagSnap.kontaktFallMask = 0;
+            break;
+        }
+
         
 case CMD_GET_M2_ENTRY:
 {
@@ -583,6 +673,107 @@ void megaI2C_update()
     const uint16_t curOccMask      = g_systemStatus.blockOccupiedMask; // stable occupied mask
     const uint16_t curTurnoutSoll  = g_systemStatus.turnoutSollMask;
     const uint16_t curTurnoutIst   = g_systemStatus.turnoutIstMask;
+    
+    // ------------------------------------------------------------
+    // Diag sensor snapshot (kontakt + schaltgleise)
+    // - Snapshot update BEFORE pendingSet (no stale snapshot / "1 frame late")
+    // - Only latch DRDY for diag when a diag client is active (recent reads)
+    // ------------------------------------------------------------
+    auto readKontakt = [&](uint8_t idx) -> bool {
+        // fixed order, idx 0..13
+        switch (idx) {
+            case 0:  return k_block1.raw();
+            case 1:  return k_block2.raw();
+            case 2:  return k_block3.raw();
+            case 3:  return k_block4.raw();
+            case 4:  return k_block5.raw();
+            case 5:  return k_block6.raw();
+            case 6:  return k_sbhf1.raw();
+            case 7:  return k_sbhf2.raw();
+            case 8:  return k_sbhf3.raw();
+            case 9:  return k_nothalt.raw();
+            case 10: return k_bhf2a.raw();
+            case 11: return k_bhf2b.raw();
+            case 12: return k_bhf4a.raw();
+            case 13: return k_bhf4b.raw();
+            default: return false;
+        }
+    };
+
+    uint16_t kontaktLevel = 0;
+    for (uint8_t i = 0; i < M2_DIAG_NUM_KONTAKTE; ++i) {
+        if (readKontakt(i)) kontaktLevel |= (1u << i);
+    }
+
+    const uint8_t schaltLevel =
+        (g_s11.levelActive() ? (1u << 0) : 0) |
+        (g_s12.levelActive() ? (1u << 1) : 0) |
+        (g_s13.levelActive() ? (1u << 2) : 0) |
+        (g_s14.levelActive() ? (1u << 3) : 0) |
+        (g_s15.levelActive() ? (1u << 4) : 0) |
+        (g_s16.levelActive() ? (1u << 5) : 0);
+
+    const uint8_t schaltRise[M2_DIAG_NUM_SCHALT] = {
+        g_s11.riseCount(), g_s12.riseCount(), g_s13.riseCount(),
+        g_s14.riseCount(), g_s15.riseCount(), g_s16.riseCount()
+    };
+    const uint8_t schaltFall[M2_DIAG_NUM_SCHALT] = {
+        g_s11.fallCount(), g_s12.fallCount(), g_s13.fallCount(),
+        g_s14.fallCount(), g_s15.fallCount(), g_s16.fallCount()
+    };
+
+    bool diagChanged = false;
+
+    if (!s_diagHasLast) {
+        s_diagHasLast = true;
+        s_diagSnap.seq = 1;
+        s_diagSnap.kontaktLevelMask = kontaktLevel;
+        s_diagSnap.kontaktRiseMask  = 0;
+        s_diagSnap.kontaktFallMask  = 0;
+        s_diagSnap.schaltLevelMask  = schaltLevel;
+        memcpy(s_diagSnap.schaltRise, schaltRise, sizeof(s_diagSnap.schaltRise));
+        memcpy(s_diagSnap.schaltFall, schaltFall, sizeof(s_diagSnap.schaltFall));
+        s_diagLastKontaktLevel = kontaktLevel;
+        s_diagLastSchaltLevel  = schaltLevel;
+        memcpy(s_diagLastSchaltRise, schaltRise, sizeof(s_diagLastSchaltRise));
+        memcpy(s_diagLastSchaltFall, schaltFall, sizeof(s_diagLastSchaltFall));
+    } else {
+        const uint16_t diff = (uint16_t)(kontaktLevel ^ s_diagLastKontaktLevel);
+        if (diff) {
+            const uint16_t rises = (uint16_t)(diff & kontaktLevel);
+            const uint16_t falls = (uint16_t)(diff & (uint16_t)~kontaktLevel);
+            s_diagSnap.kontaktRiseMask |= rises;
+            s_diagSnap.kontaktFallMask |= falls;
+            s_diagSnap.kontaktLevelMask = kontaktLevel;
+            s_diagLastKontaktLevel = kontaktLevel;
+            diagChanged = true;
+        }
+
+        if (schaltLevel != s_diagLastSchaltLevel) {
+            s_diagSnap.schaltLevelMask = schaltLevel;
+            s_diagLastSchaltLevel = schaltLevel;
+            diagChanged = true;
+        }
+        for (uint8_t i = 0; i < M2_DIAG_NUM_SCHALT; ++i) {
+            if (schaltRise[i] != s_diagLastSchaltRise[i]) {
+                s_diagLastSchaltRise[i] = schaltRise[i];
+                s_diagSnap.schaltRise[i] = schaltRise[i];
+                diagChanged = true;
+            }
+            if (schaltFall[i] != s_diagLastSchaltFall[i]) {
+                s_diagLastSchaltFall[i] = schaltFall[i];
+                s_diagSnap.schaltFall[i] = schaltFall[i];
+                diagChanged = true;
+            }
+        }
+
+        if (diagChanged) {
+            s_diagSnap.seq = (uint8_t)(s_diagSnap.seq + 1);
+            if (megaI2C_diagIsActive()) {
+                pendingSet(M2_PEND_DIAG_SENSORS);
+            }
+        }
+    }
 
     buildMega2SafetyStatus(curSafety);
     buildMega2BlockStatus(curBlocks, blockController);
@@ -625,9 +816,31 @@ void megaI2C_update()
 
     if (bits)
     {
+
+#if MEGA2_DEBUG
+        dbgPrintPendBits(bits);
+        if (bits & M2_PEND_BLOCKS)
+        {
+            DBG_PRINTF("[PEND] occMask %04X -> %04X\n", s_lastOccMask, curOccMask);
+        }
+        if (bits & (M2_PEND_ENTRY|M2_PEND_ENTRY_PREV))
+        {
+            const uint8_t dE = diffCountBytes(s_lastEntry,   curEntry,   sizeof(curEntry));
+            const uint8_t dP = diffCountBytes(s_lastPreview, curPreview, sizeof(curPreview));
+            DBG_PRINT(F("[PEND] entryDiff=")); DBG_PRINT(dE);
+            DBG_PRINT(F(" prevDiff=")); DBG_PRINTLN(dP);
+        }
+        if (bits & M2_PEND_TURNOUTS)
+        {
+            DBG_PRINTF("[PEND] turnoutSoll %04X -> %04X  turnoutIst %04X -> %04X\n",
+                       s_lastTurnoutSoll, curTurnoutSoll,
+                       s_lastTurnoutIst,  curTurnoutIst);
+        }
+#endif
+
         s_lastSafety = curSafety;
         memcpy(s_lastBlocks,  curBlocks,  sizeof(curBlocks));
-        memcpy(s_lastBlockFlags, curBlockFlags, sizeof(curBlockFlags));
+        memcpy(s_lastBlockFlags, curBlockFlags, sizeof(curBlockFlags)); 
         s_lastSbh = curSbh;
         memcpy(s_lastEntry,   curEntry,   sizeof(curEntry));
         memcpy(s_lastPreview, curPreview, sizeof(curPreview));

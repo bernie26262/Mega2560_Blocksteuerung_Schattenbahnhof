@@ -7,6 +7,11 @@ class SensorStrom;
 class Block
 {
 public:
+    // Freigabe erst nach stabil "frei" (Debounce/Delay)
+    // (occupied->free verzögert; occupied->true weiterhin sofort)
+    static constexpr uint32_t STABLE_FREE_MS   = 2500;
+    static constexpr uint32_t STABLE_SIGNAL_MS = 50;
+
     Block(uint8_t id,
           SensorKontakt* k1,
           SensorStrom* strom,

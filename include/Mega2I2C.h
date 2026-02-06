@@ -12,3 +12,7 @@ void megaI2C_setPending(uint16_t bits);
 
 // Backward compatible helper: mark all digital payloads as "changed" (DRDY active LOW)
 void megaI2C_markDataReady();
+
+// Returns true if the master recently requested diag sensor snapshots.
+// Used to avoid latching DRDY for diag-only signals when no diag client is active.
+bool megaI2C_diagIsActive();

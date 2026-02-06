@@ -221,9 +221,6 @@ bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
 {
     (void)fromBlock;
 
-    // 500ms stabil "frei" (wichtig gegen Prellen/Jitter)
-    static constexpr uint32_t STABLE_FREE_MS = 500;
-
     if (!idOk(toBlock, m_count))
         return false;
 
@@ -245,11 +242,14 @@ bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
         if (t == 0)
             return true; // gerade erst frei geworden oder nie gesetzt -> erlauben
 
-        return (millis() - t) >= STABLE_FREE_MS;
+        return (millis() - t) >= Block::STABLE_FREE_MS;
     }
 #endif
 
-    return !isOccupied(toBlock);
+    // Normalbetrieb: Freigabe erst, wenn Block wirklich frei ist (Debounce/Delay)
+    Block* b = m_blocks[toBlock];
+    if (!b) return !isOccupied(toBlock);
+    return b->isReallyFree(millis());
 }
 
 #if MEGA2_DEBUG
