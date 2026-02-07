@@ -158,6 +158,26 @@ static uint8_t  s_diagLastSchaltLevel  = 0;
 static uint8_t  s_diagLastSchaltRise[M2_DIAG_NUM_SCHALT]{};
 static uint8_t  s_diagLastSchaltFall[M2_DIAG_NUM_SCHALT]{};
 
+// Helpers: packed 4-bit counters in Mega2DiagSensorsPayload::kontaktRise4/kontaktFall4
+static inline uint8_t getNibble(const uint8_t* a, uint8_t idx)
+{
+    const uint8_t b = a[idx >> 1];
+    return (idx & 1) ? (uint8_t)(b >> 4) : (uint8_t)(b & 0x0F);
+}
+static inline void setNibble(uint8_t* a, uint8_t idx, uint8_t v)
+{
+    const uint8_t bi = (uint8_t)(idx >> 1);
+    const uint8_t shift = (idx & 1) ? 4 : 0;
+    const uint8_t mask = (uint8_t)(0x0F << shift);
+    a[bi] = (uint8_t)((a[bi] & ~mask) | ((v & 0x0F) << shift));
+}
+static inline void incNibble(uint8_t* a, uint8_t idx)
+{
+    uint8_t v = getNibble(a, idx);
+    v = (uint8_t)((v + 1) & 0x0F);
+    setNibble(a, idx, v);
+}
+
 // Selftest-Retry darf NICHT im I2C-Callback gestartet werden (kann onRequest verhungern lassen)
 static volatile bool s_pendingSelftestRetry = false;
 static volatile bool s_pendingSelftestStartup = false;
@@ -530,10 +550,9 @@ void i2cOnRequest()
 
             Wire.write(reinterpret_cast<uint8_t*>(&s_diagSnap), sizeof(s_diagSnap));
 
-            // Clear pending bit + edge-sticky masks after serving the snapshot.
+            // Clear pending bit after serving the snapshot.
+            // IMPORTANT: we do NOT clear edge counters here (cumulative, like Mega1).
             pendingClear(M2_PEND_DIAG_SENSORS);
-            s_diagSnap.kontaktRiseMask = 0;
-            s_diagSnap.kontaktFallMask = 0;
             break;
         }
 
@@ -713,13 +732,18 @@ void megaI2C_update()
         (g_s15.levelActive() ? (1u << 4) : 0) |
         (g_s16.levelActive() ? (1u << 5) : 0);
 
+    auto saneU8 = [](uint8_t v) -> uint8_t {
+        // 0xFF == invalid/uninitialized -> treat as 0 for diagnostics
+        return (v == 0xFF) ? 0 : v;
+    };
+    
     const uint8_t schaltRise[M2_DIAG_NUM_SCHALT] = {
-        g_s11.riseCount(), g_s12.riseCount(), g_s13.riseCount(),
-        g_s14.riseCount(), g_s15.riseCount(), g_s16.riseCount()
+        saneU8(g_s11.riseCount()), saneU8(g_s12.riseCount()), saneU8(g_s13.riseCount()),
+        saneU8(g_s14.riseCount()), saneU8(g_s15.riseCount()), saneU8(g_s16.riseCount())
     };
     const uint8_t schaltFall[M2_DIAG_NUM_SCHALT] = {
-        g_s11.fallCount(), g_s12.fallCount(), g_s13.fallCount(),
-        g_s14.fallCount(), g_s15.fallCount(), g_s16.fallCount()
+        saneU8(g_s11.fallCount()), saneU8(g_s12.fallCount()), saneU8(g_s13.fallCount()),
+        saneU8(g_s14.fallCount()), saneU8(g_s15.fallCount()), saneU8(g_s16.fallCount())
     };
 
     bool diagChanged = false;
@@ -728,8 +752,8 @@ void megaI2C_update()
         s_diagHasLast = true;
         s_diagSnap.seq = 1;
         s_diagSnap.kontaktLevelMask = kontaktLevel;
-        s_diagSnap.kontaktRiseMask  = 0;
-        s_diagSnap.kontaktFallMask  = 0;
+        memset(s_diagSnap.kontaktRise4, 0, sizeof(s_diagSnap.kontaktRise4));
+        memset(s_diagSnap.kontaktFall4, 0, sizeof(s_diagSnap.kontaktFall4));
         s_diagSnap.schaltLevelMask  = schaltLevel;
         memcpy(s_diagSnap.schaltRise, schaltRise, sizeof(s_diagSnap.schaltRise));
         memcpy(s_diagSnap.schaltFall, schaltFall, sizeof(s_diagSnap.schaltFall));
@@ -740,10 +764,15 @@ void megaI2C_update()
     } else {
         const uint16_t diff = (uint16_t)(kontaktLevel ^ s_diagLastKontaktLevel);
         if (diff) {
-            const uint16_t rises = (uint16_t)(diff & kontaktLevel);
-            const uint16_t falls = (uint16_t)(diff & (uint16_t)~kontaktLevel);
-            s_diagSnap.kontaktRiseMask |= rises;
-            s_diagSnap.kontaktFallMask |= falls;
+            // Per-contact 4-bit edge counters (cumulative, wrap 0..15).
+            // NOTE: We keep the last level separately to detect edges reliably.
+                for (uint8_t i = 0; i < M2_DIAG_NUM_KONTAKTE; ++i) {
+                    const uint16_t bit = (uint16_t)(1u << i);
+                    if (diff & bit) {
+                        if (kontaktLevel & bit) incNibble(s_diagSnap.kontaktRise4, i);
+                        else                    incNibble(s_diagSnap.kontaktFall4, i);
+                    }
+                }
             s_diagSnap.kontaktLevelMask = kontaktLevel;
             s_diagLastKontaktLevel = kontaktLevel;
             diagChanged = true;

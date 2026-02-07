@@ -170,6 +170,7 @@ struct __attribute__((packed)) Mega2TurnoutsPayload
 // =====================================================
 static constexpr uint8_t M2_DIAG_NUM_KONTAKTE = 14; // fixed order (see Mega2I2C.cpp)
 static constexpr uint8_t M2_DIAG_NUM_SCHALT   = 6;  // S11..S16
+static constexpr uint8_t M2_DIAG_KONTAKT_CNT_BYTES = (M2_DIAG_NUM_KONTAKTE + 1) / 2; // 4-bit counters packed
 
 struct __attribute__((packed)) Mega2DiagSensorsPayload
 {
@@ -177,8 +178,9 @@ struct __attribute__((packed)) Mega2DiagSensorsPayload
 
     // Kontakte (14 Bits used)
     uint16_t kontaktLevelMask; // 1 = aktiv (LOW)
-    uint16_t kontaktRiseMask;  // sticky: 0->1 since last DIAG read
-    uint16_t kontaktFallMask;  // sticky: 1->0 since last DIAG read
+    uint8_t  kontaktRise4[M2_DIAG_KONTAKT_CNT_BYTES]; // 4-bit counters packed (wrap mod 16)
+    uint8_t  kontaktFall4[M2_DIAG_KONTAKT_CNT_BYTES]; // 4-bit counters packed (wrap mod 16)
+ 
 
     // Schaltgleise S11..S16
     uint8_t  schaltLevelMask;  // bit0=S11 ... bit5=S16 ; 1=aktiv (LOW)
