@@ -2,6 +2,16 @@
 #include <Arduino.h>
 
 // HINWEIS: Command-IDs müssen 1:1 mit Mega2Command übereinstimmen (siehe unten).
+
+// =====================================================
+//  Protocol identity (Mega2 <-> ESP)
+//  - Keep identical on BOTH sides.
+// =====================================================
+// "M2EP" (Mega2 <-> ESP)
+#define PROTO_MAGIC   0x4D324550u
+// Bump whenever any wire-visible struct/command meaning changes.
+#define PROTO_VERSION 0x0003u
+
 // =====================================================
 //  Anlagen-Konstanten (fix)
 // =====================================================
@@ -172,6 +182,9 @@ static constexpr uint8_t M2_DIAG_NUM_KONTAKTE = 14; // fixed order (see Mega2I2C
 static constexpr uint8_t M2_DIAG_NUM_SCHALT   = 6;  // S11..S16
 static constexpr uint8_t M2_DIAG_KONTAKT_CNT_BYTES = (M2_DIAG_NUM_KONTAKTE + 1) / 2; // 4-bit counters packed
 
+// Wire size of Mega2DiagSensorsPayload (packed): 30 bytes
+static constexpr uint8_t M2_DIAG_SENSORS_WIRE_SIZE = 30;
+
 struct __attribute__((packed)) Mega2DiagSensorsPayload
 {
     uint8_t  seq;
@@ -187,6 +200,8 @@ struct __attribute__((packed)) Mega2DiagSensorsPayload
     uint8_t  schaltRise[M2_DIAG_NUM_SCHALT]; // cumulative counters (wrap ok)
     uint8_t  schaltFall[M2_DIAG_NUM_SCHALT]; // cumulative counters (wrap ok)
 };
+static_assert(sizeof(Mega2DiagSensorsPayload) == M2_DIAG_SENSORS_WIRE_SIZE,
+              "PROTO drift: Mega2DiagSensorsPayload wire size mismatch");
 static_assert(sizeof(Mega2DiagSensorsPayload) <= 32, "Mega2DiagSensorsPayload must fit Wire buffer");
 
 // Canonical command enum (Mega2 uses these symbols)
