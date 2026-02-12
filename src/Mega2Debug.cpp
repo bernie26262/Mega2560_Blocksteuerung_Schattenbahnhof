@@ -7,11 +7,62 @@
 
 #include "Mega2PowerControl.h"
 #include "SensorKontakt.h"
+#include "SensorStrom.h"
+#include "SensorTrafoAC.h"
+// ------------------------------------------------------------
+// Optional: 1x/s Analog-Tick (Strom/Trafo) – temporär fürs Bring-up
+// Aktivieren per build_flag: -DMEGA2_DEBUG_ANALOG_TICK=1
+// ------------------------------------------------------------
+#ifndef MEGA2_DEBUG_ANALOG_TICK
+#define MEGA2_DEBUG_ANALOG_TICK 0
+#endif
 
 extern BlockController& blockController;
 extern ShadowYardController& shadowController;
 extern Mega2PowerControl g_power;
 extern SensorKontakt k_nothalt;
+
+#if MEGA2_DEBUG_ANALOG_TICK
+extern SensorStrom strom1;
+extern SensorStrom stromSbhf1;
+extern SensorTrafoAC g_trafoOben;
+extern SensorTrafoAC g_trafoUnten;
+static uint32_t s_lastAnalogTickMs = 0;
+
+void mega2DebugAnalogTick(uint32_t nowMs)
+{
+    if (nowMs - s_lastAnalogTickMs < 1000u) return;
+    s_lastAnalogTickMs = nowMs;
+
+    DBG_PRINT(F("[AN] I1 raw="));
+    DBG_PRINT(strom1.raw());
+    DBG_PRINT(F(" off="));
+    DBG_PRINT(strom1.offset());
+    DBG_PRINT(F(" rms="));
+    DBG_PRINT(strom1.rmsCounts());
+    DBG_PRINT(F(" act="));
+    DBG_PRINT(strom1.overThreshold());
+
+    DBG_PRINT(F(" | ISB1 raw="));
+    DBG_PRINT(stromSbhf1.raw());
+    DBG_PRINT(F(" off="));
+    DBG_PRINT(stromSbhf1.offset());
+    DBG_PRINT(F(" rms="));
+    DBG_PRINT(stromSbhf1.rmsCounts());
+    DBG_PRINT(F(" act="));
+    DBG_PRINT(stromSbhf1.overThreshold());
+
+    DBG_PRINT(F(" | TOben="));
+    DBG_PRINT(g_trafoOben.rms());
+    DBG_PRINT(F("V pow="));
+    DBG_PRINT(g_trafoOben.isPowered());
+    DBG_PRINT(F(" | TUnten="));
+    DBG_PRINT(g_trafoUnten.rms());
+    DBG_PRINT(F("V pow="));
+    DBG_PRINTLN(g_trafoUnten.isPowered());
+}
+#endif
+
 
 void mega2DebugDump()
 {
@@ -39,6 +90,30 @@ void mega2DebugDump()
                shadowController.allowedGleisMask(),
                shadowController.warningMask());
 
+#if MEGA2_DEBUG_ANALOG
+    // -------- ANALOG (1x Snapshot) --------
+    // Strom: nur exemplarisch B1 (strom1). Weitere Kanäle bei Bedarf ergänzen.
+    DBG_PRINT(F("Analog: I1 raw="));
+    DBG_PRINT(strom1.raw());
+    DBG_PRINT(F(" off="));
+    DBG_PRINT(strom1.offset());
+    DBG_PRINT(F(" rms="));
+    DBG_PRINT(strom1.rmsCounts());
+    DBG_PRINT(F(" thr="));
+    // Kein Getter vorhanden -> hier nur Status ausgeben
+    DBG_PRINT(F(" act="));
+    DBG_PRINT(strom1.overThreshold());
+    DBG_PRINT(F(" | TrafoOben Vrms="));
+    DBG_PRINT(g_trafoOben.rms());
+    DBG_PRINT(F(" pow="));
+    DBG_PRINT(g_trafoOben.isPowered());
+    DBG_PRINT(F(" | TrafoUnten Vrms="));
+    DBG_PRINT(g_trafoUnten.rms());
+    DBG_PRINT(F(" pow="));
+    DBG_PRINTLN(g_trafoUnten.isPowered());
+#endif
+
+
     // -------- BLOCKS --------
     DBG_PRINTLN(F("Blocks:"));
     for (uint8_t i = 1; i <= blockController.count(); i++)
@@ -62,3 +137,7 @@ void mega2DebugDump()
 
     DBG_PRINTLN(F("======================"));
 }
+
+#if MEGA2_DEBUG_ANALOG_TICK
+void mega2DebugAnalogTick(uint32_t nowMs);
+#endif

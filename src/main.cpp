@@ -112,16 +112,16 @@ SensorKontakt k_bhf4a(PIN_KONTAKT_BHF4_A);
 SensorKontakt k_bhf4b(PIN_KONTAKT_BHF4_B);
 
 // --------------------- STROMSENSOREN ----------------------------------------
-SensorStrom strom1(PIN_ADC_BLOCK1);
-SensorStrom strom2(PIN_ADC_BLOCK2);
-SensorStrom strom3(PIN_ADC_BLOCK3);
-SensorStrom strom4(PIN_ADC_BLOCK4);
-SensorStrom strom5(PIN_ADC_BLOCK5);
-SensorStrom strom6(PIN_ADC_BLOCK6);
+SensorStrom strom1(PIN_ADC_BLOCK1, 8);
+SensorStrom strom2(PIN_ADC_BLOCK2, 8);
+SensorStrom strom3(PIN_ADC_BLOCK3, 8);
+SensorStrom strom4(PIN_ADC_BLOCK4, 8);
+SensorStrom strom5(PIN_ADC_BLOCK5, 8);
+SensorStrom strom6(PIN_ADC_BLOCK6, 8);
 
-SensorStrom stromSbhf1(PIN_ADC_SBH_GL1);
-SensorStrom stromSbhf2(PIN_ADC_SBH_GL2);
-SensorStrom stromSbhf3(PIN_ADC_SBH_GL3);
+SensorStrom stromSbhf1(PIN_ADC_SBH_GL1, 8);
+SensorStrom stromSbhf2(PIN_ADC_SBH_GL2, 8);
+SensorStrom stromSbhf3(PIN_ADC_SBH_GL3, 8);
 
 // --------------------- BLOCK-OBJEKTE ----------------------------------------
 static void initBlocks()
@@ -461,7 +461,7 @@ static void dbgHandleSerial()
         if (s_dbgLen == 0)
         {
             const bool isSingle =
-+                (ch == 'p' || ch == 'n' || ch == 'N' || ch == 'a' || ch == 'r' || ch == 'd' || ch == 'T' || ch == 't') ||
+                (ch == 'p' || ch == 'n' || ch == 'N' || ch == 'a' || ch == 'r' || ch == 'd' || ch == 'T' || ch == 't') ||
                 ((ch >= '1' && ch <= '6') && MEGA2_SIM_MODE) ||
                 ((ch == 'h' || ch == 'H') && MEGA2_SIM_MODE);
 
@@ -588,6 +588,9 @@ void loop()
 
 #if MEGA2_DEBUG
     dbgHandleSerial();
+  #if MEGA2_DEBUG_ANALOG_TICK
+    mega2DebugAnalogTick(now);
+  #endif
 #endif
 
     safetyUpdate();

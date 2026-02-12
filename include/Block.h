@@ -26,6 +26,10 @@ public:
     bool kontaktAktiv() const { return m_kontaktAktiv; }
     bool stromAktiv()   const { return m_stromAktiv; }
 
+    // Für Diagnose/UI: echter Messwert (falls SensorStrom das liefert)
+    uint16_t stromRmsCounts() const;
+    uint16_t stromRms_mA() const;
+
     // B4.1: zeitlich stabile Freigabe
     bool isReallyFree(uint32_t nowMs) const;
 

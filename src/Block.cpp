@@ -1,6 +1,7 @@
 #include "Block.h"
 
 #include <Arduino.h>
+#include <stdint.h>
 
 #include "SensorKontakt.h"
 #include "SensorStrom.h"
@@ -52,12 +53,20 @@ static inline bool kontaktOcc(SensorKontakt* k)
 
 void Block::begin()
 {
-    // Initialzustand aus den Sensoren lesen
+    
+    // Stromsensor optional initialisieren (idempotent halten!)
+    if (m_strom)
+        m_strom->begin();
+
+// Initialzustand aus den Sensoren lesen
     const bool nowKontakt =
         kontaktOcc(m_kontakt1) ||
         kontaktOcc(m_kontakt2) ||
         kontaktOcc(m_kontakt3);
 
+    // Strom: erst updaten, dann auswerten
+    if (m_strom)
+        m_strom->update();
     const bool nowStrom = (m_strom ? m_strom->overThreshold() : false);
 
     m_kontaktAktiv = nowKontakt;
@@ -77,6 +86,9 @@ void Block::update(uint32_t nowMs)
         kontaktOcc(m_kontakt2) ||
         kontaktOcc(m_kontakt3);
 
+    // Stromsensor zyklisch updaten (damit overThreshold() auf aktuellen Samples basiert)
+    if (m_strom)
+        m_strom->update();
     const bool nowStrom = (m_strom ? m_strom->overThreshold() : false);
 
     // Kontakt-Edge
@@ -143,4 +155,14 @@ bool Block::isReallyFree(uint32_t nowMs) const
 bool Block::besetzt() const
 {
     return m_besetzt;
+}
+
+uint16_t Block::stromRmsCounts() const
+{
+    return m_strom ? m_strom->rmsCounts() : 0;
+}
+
+uint16_t Block::stromRms_mA() const
+{
+    return m_strom ? m_strom->rms_mA() : 0;
 }

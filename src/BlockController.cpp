@@ -35,11 +35,22 @@ void BlockController::update(uint32_t nowMs)
 
         b->update(nowMs);
 
-        // In HW haben wir hier derzeit nur eine bool-Aussage (stromAktiv).
-        // Für Anzeige/Diagnose mapen wir das heuristisch auf ~300mA.
         const bool active = b->stromAktiv();
         m_stromActive[id]   = active;
-        m_stromFiltered[id] = active ? DBG_SIM_CURRENT_NOMINAL_MA : 0;
+
+        if (!active)
+        {
+            m_stromFiltered[id] = 0;
+        }
+        else
+        {
+            // Wenn SensorStrom mA liefern kann -> nutzen. Sonst fallback.
+            const uint16_t ma = b->stromRms_mA();
+            if (ma != 0)
+                m_stromFiltered[id] = ma;
+            else
+                m_stromFiltered[id] = DBG_SIM_CURRENT_NOMINAL_MA; // fallback, solange mvPerAmp unbekannt
+        }
 
 #if MEGA2_DEBUG
         // Debug-Helper: wenn Debug-OCC aktiv ist, merken wir uns den "frei" Zeitpunkt

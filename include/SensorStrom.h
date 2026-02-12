@@ -3,27 +3,41 @@
 
 class SensorStrom {
 public:
-    explicit SensorStrom(uint8_t pin, uint16_t threshold = 100)
-        : m_pin(pin), m_threshold(threshold)
-    {}
+    // thresholdCounts bezieht sich auf RMS der Abweichung vom Offset (nicht auf raw ADC).
+    // mvPerAmp optional (z.B. ACS712: 185/100/66 mV/A je nach Typ). 0 => keine Umrechnung.
+    // Für ZMCT103C (5A CT) sind kleine Signalpegel typisch -> Default niedriger.
+    explicit SensorStrom(uint8_t pin,
+                         uint16_t thresholdCounts = 8,
+                         uint16_t mvPerAmp = 0,
+                         uint16_t vref_mV = 5000,
+                         uint16_t adcMax = 1023);
 
-    void begin() {}
+    void begin();
+    void update();
 
-    void update() {
-        uint16_t v = analogRead(m_pin);
-        m_filtered = (m_filtered * 9 + v) / 10;
-    }
+    uint16_t raw() const;
+    uint16_t offset() const;
+    uint16_t absDevCounts() const;
+    uint16_t rmsCounts() const;
 
-    uint16_t filtered() const { return m_filtered; }
+    bool overThreshold() const;
 
-    bool overThreshold() const {
-        return m_filtered >= m_threshold;
-    }
-
-    void setThreshold(uint16_t t) { m_threshold = t; }
+    void setThresholdCounts(uint16_t t);
+    uint16_t rms_mA() const;
 
 private:
     uint8_t  m_pin;
-    uint16_t m_threshold;
-    uint16_t m_filtered = 0;
+    uint16_t m_thresholdCounts;
+
+    // Optional scaling
+    uint16_t m_mvPerAmp;
+    uint16_t m_vref_mV;
+    uint16_t m_adcMax;
+
+    // State
+    bool     m_hasInit = false;
+    uint16_t m_raw = 0;
+    uint16_t m_offset = 0;
+    uint16_t m_absDev = 0;
+    uint32_t m_rms2 = 0; // EMA von d^2
 };
