@@ -7,6 +7,7 @@
 #include "Weiche.h"
 #include "safety.h"
 #include "safety_error.h"
+#include "Mega2RunMode.h"
 
 // globale Controller
 extern BlockController      g_bc;
@@ -130,6 +131,9 @@ void buildMega2SystemStatus(SystemStatus& out)
 
     if (safetyIsPowerOn())
         out.flags |= SYS_POWER_ON;
+
+    if (mega2IsDiagTest())
+        out.flags |= SYS_MODE_DIAG;
 
     // -----------------------------
     // SAFETY ERROR DETAILS

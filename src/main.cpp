@@ -5,6 +5,7 @@
 #include "mega2_pins.h"
 #include <EEPROM.h>
 
+
 #ifndef MEGA2_SIM_MODE
 #define MEGA2_SIM_MODE 0
 #endif
@@ -34,6 +35,7 @@
 #include "mega2_debug.h"
 #include "Mega2Debug.h"
 #include "Mega2Status.h"
+#include "Mega2RunMode.h"
 
 // ============================================================================
 // GLOBALE OBJEKTE
@@ -161,12 +163,16 @@ static void sbhfHandleSchaltgleise()
 {
     // PulseSensor ist flankenbasiert (HIGH->LOW).
     // Wichtig: muss zyklisch aufgerufen werden, sonst triggert S11..S16 nie.
-    if (g_s11.fellEdge()) { DBG_PRINTLN(F("[SBHF] S11 pulse")); g_sbhf.onS11(); }
-    if (g_s12.fellEdge()) { DBG_PRINTLN(F("[SBHF] S12 pulse")); g_sbhf.onS12(); }
-    if (g_s13.fellEdge()) { DBG_PRINTLN(F("[SBHF] S13 pulse")); g_sbhf.onS13(); }
-    if (g_s14.fellEdge()) { DBG_PRINTLN(F("[SBHF] S14 pulse")); g_sbhf.onS14(); }
-    if (g_s15.fellEdge()) { DBG_PRINTLN(F("[SBHF] S15 pulse")); g_sbhf.onS15(); }
-    if (g_s16.fellEdge()) { DBG_PRINTLN(F("[SBHF] S16 pulse")); g_sbhf.onS16(); }
+    // In DIAG_TEST sollen Sensoren weiterhin gelesen/gezählt werden,
+    // aber KEINE Automatik-Events in die SBHF-Logik einspeisen.
+    const bool dispatch = !mega2IsDiagTest();
+
+    if (g_s11.fellEdge()) { DBG_PRINTLN(F("[SBHF] S11 pulse")); if (dispatch) g_sbhf.onS11(); }
+    if (g_s12.fellEdge()) { DBG_PRINTLN(F("[SBHF] S12 pulse")); if (dispatch) g_sbhf.onS12(); }
+    if (g_s13.fellEdge()) { DBG_PRINTLN(F("[SBHF] S13 pulse")); if (dispatch) g_sbhf.onS13(); }
+    if (g_s14.fellEdge()) { DBG_PRINTLN(F("[SBHF] S14 pulse")); if (dispatch) g_sbhf.onS14(); }
+    if (g_s15.fellEdge()) { DBG_PRINTLN(F("[SBHF] S15 pulse")); if (dispatch) g_sbhf.onS15(); }
+    if (g_s16.fellEdge()) { DBG_PRINTLN(F("[SBHF] S16 pulse")); if (dispatch) g_sbhf.onS16(); }
 }
 
 
@@ -608,16 +614,24 @@ void loop()
     }
 
 
-    if (now - lastBlockUpdate >= BLOCK_UPDATE_MS)
+    // ------------------------------------------------------------
+    // AUTOMATIK-PFADE
+    // In DIAG_TEST werden die Automatik-Schaltpfade pausiert.
+    // Safety bleibt aktiv und kann weiterhin Relais hart abschalten.
+    // ------------------------------------------------------------
+    if (!mega2IsDiagTest())
     {
-        lastBlockUpdate = now;
-        g_bc.update(now);
-    }
+        if (now - lastBlockUpdate >= BLOCK_UPDATE_MS)
+        {
+            lastBlockUpdate = now;
+            g_bc.update(now);
+        }
 
     if (now - lastSbhfUpdate >= SBHF_UPDATE_MS)
-    {
-        lastSbhfUpdate = now;
-        g_sbhf.update(now);
+        {
+            lastSbhfUpdate = now;
+            g_sbhf.update(now);
+        }
     }
 
     if (now - lastWeichenUpdate >= WEICHEN_UPDATE_MS)

@@ -18,6 +18,7 @@ extern uint16_t g_bootId;
 #include "system/status_system.h"
 #include "safety.h"
 #include "mega2_debug.h"
+#include "Mega2RunMode.h"
  
 // Analog payload (fixed point): see proto_common.h Mega2AnalogPayload
 // ------------------------------------------------------------
@@ -345,6 +346,43 @@ void i2cOnReceive(int len)
         s_pendingSelftestStartup = true;
         pendingSet(M2_PEND_SHADOW | M2_PEND_ENTRY | M2_PEND_ENTRY_PREV | M2_PEND_SAFETY);
         s_cmdResponseOk      = 1;
+        s_cmdResponsePending = true;
+        return;
+    }
+
+    // --------------------------------------------------
+    // MODE: Automatik <-> DIAG/TEST
+    // Payload: [mode]
+    //  mode: 0=AUTOMATIK, 1=DIAG_TEST
+    // --------------------------------------------------
+    if (cmd == M2_CMD_SET_RUNMODE)
+    {
+        if (len < 1 + 1)
+        {
+            s_cmdResponseOk      = 0;
+            s_cmdResponsePending = true;
+            return;
+        }
+
+        const uint8_t mode = Wire.read();
+
+        bool ok = false;
+        if (mode == 0)
+        {
+            mega2SetRunMode(Mega2RunMode::Automatik);
+            ok = true;
+        }
+        else if (mode == 1)
+        {
+            mega2SetRunMode(Mega2RunMode::DiagTest);
+            ok = true;
+        }
+
+        // Mode affects runtime behavior; nudge master to refresh digital payloads.
+        if (ok)
+            pendingSet(M2_PEND_ALL_DIGITAL | M2_PEND_TURNOUTS);
+
+        s_cmdResponseOk      = ok ? 1 : 0;
         s_cmdResponsePending = true;
         return;
     }

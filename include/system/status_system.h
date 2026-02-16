@@ -22,6 +22,9 @@ enum SystemStatusFlags : uint16_t
     SYS_ERROR_PRESENT    = 1 << 2,
     SYS_CONTROLLER_RESET = 1 << 3,
     SYS_WARNING_PRESENT  = 1 << 4,
+    // Node is in diagnose/service test mode (automation paused).
+    // (Mega1 may leave this 0; Mega2 sets it when DIAG_TEST is active.)
+    SYS_MODE_DIAG        = 1 << 5,
 };
 
 // v3 (kompakt) — PACKED für stabile I2C-Übertragung
