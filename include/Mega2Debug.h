@@ -1,5 +1,5 @@
 #pragma once
-
+#include <Arduino.h>  // for uint32_t
 // Diagnose-Ausgabe
 void mega2DebugDump();
 
