@@ -220,6 +220,50 @@ static inline uint32_t buildDiagRelaysMaskActiveLow()
     return m;
 }
 
+// Map diag relay bit index -> physical pin (must match buildDiagRelaysMaskActiveLow order)
+static inline bool diagRelayBitToPin(uint8_t bit, uint8_t& pinOut)
+{
+    switch (bit)
+    {
+        case 0:  pinOut = PIN_W12_GERADE; break;
+        case 1:  pinOut = PIN_W12_ABBIEGEN; break;
+        case 2:  pinOut = PIN_W13_GERADE; break;
+        case 3:  pinOut = PIN_W13_ABBIEGEN; break;
+        case 4:  pinOut = PIN_W14_GERADE; break;
+        case 5:  pinOut = PIN_W14_ABBIEGEN; break;
+        case 6:  pinOut = PIN_W15_GERADE; break;
+        case 7:  pinOut = PIN_W15_ABBIEGEN; break;
+
+        case 8:  pinOut = PIN_RELAY_BLOCK1_NACH2; break;
+        case 9:  pinOut = PIN_RELAY_BLOCK2_NACH3; break;
+        case 10: pinOut = PIN_RELAY_BLOCK3_NACH4; break;
+        case 11: pinOut = PIN_RELAY_BLOCK4_NACH1; break;
+        case 12: pinOut = PIN_RELAY_BLOCK4_NACH5; break;
+        case 13: pinOut = PIN_RELAY_BLOCK5_NACH_SBH; break;
+        case 14: pinOut = PIN_RELAY_SBH_GL1_NACH6; break;
+        case 15: pinOut = PIN_RELAY_SBH_GL2_NACH6; break;
+        case 16: pinOut = PIN_RELAY_SBH_GL3_NACH6; break;
+        case 17: pinOut = PIN_RELAY_BLOCK6_NACH4; break;
+
+        case 18: pinOut = PIN_RELAY_NOTHALT; break;
+        case 19: pinOut = PIN_RELAY_TRAFO_OBEN_CUT; break;
+        case 20: pinOut = PIN_RELAY_TRAFO_UNTEN_CUT; break;
+
+        default: return false;
+    }
+    return true;
+}
+
+// Pulse state for turnout coils (bits 0..7)
+static volatile bool     s_diagPulseReq = false;
+static volatile uint8_t  s_diagPulseBit = 0;
+static volatile uint16_t s_diagPulseMs  = 0;
+
+static bool     s_diagPulseActive = false;
+static uint8_t  s_diagPulsePin    = 0;
+static uint32_t s_diagPulseEndMs  = 0;
+
+
 // Selftest-Retry darf NICHT im I2C-Callback gestartet werden (kann onRequest verhungern lassen)
 static volatile bool s_pendingSelftestRetry = false;
 static volatile bool s_pendingSelftestStartup = false;
@@ -493,6 +537,90 @@ void i2cOnReceive(int len)
         return;
     }
 
+
+    // --------------------------------------------------
+    // DIAG: Relay Set (pin-level, active-low)
+    // Payload: Mega2DiagRelaySetPayload { bit, on }
+    // Rules:
+    //  - only in DIAG_TEST
+    //  - enable (on=1 => drive LOW) blocked when Safety locked/emergency
+    //  - disable always allowed
+    // --------------------------------------------------
+    if (cmd == CMD_SET_M2_DIAG_RELAY)
+    {
+        if (len < 1 + (int)sizeof(Mega2DiagRelaySetPayload))
+        {
+            s_cmdResponseOk      = 0;
+            s_cmdResponsePending = true;
+            return;
+        }
+
+        Mega2DiagRelaySetPayload pl{};
+        pl.bit = Wire.read();
+        pl.on  = Wire.read();
+
+        uint8_t pin = 0;
+        const bool on = (pl.on != 0);
+
+        bool ok = false;
+        if (diagRelayBitToPin(pl.bit, pin) && mega2IsDiagTest())
+        {
+            const bool allowEnable = (!on) || (!safetyIsEmergencyActive() && !safetyIsLocked());
+            if (allowEnable)
+            {
+                digitalWrite(pin, on ? LOW : HIGH);
+                ok = true;
+                pendingSet(M2_PEND_DIAG_RELAYS);
+            }
+        }
+
+        s_cmdResponseOk      = ok ? 1 : 0;
+        s_cmdResponsePending = true;
+        return;
+    }
+
+    // --------------------------------------------------
+    // DIAG: Relay Pulse (turnout coils only, bits 0..7)
+    // Payload: Mega2DiagRelayPulsePayload { bit, ms }
+    // - pulse is executed in megaI2C_update() (not inside onReceive)
+    // --------------------------------------------------
+    if (cmd == CMD_PULSE_M2_DIAG_RELAY)
+    {
+        if (len < 1 + (int)sizeof(Mega2DiagRelayPulsePayload))
+        {
+            s_cmdResponseOk      = 0;
+            s_cmdResponsePending = true;
+            return;
+        }
+
+        Mega2DiagRelayPulsePayload pl{};
+        pl.bit = Wire.read();
+        const uint8_t lo = Wire.read();
+        const uint8_t hi = Wire.read();
+        pl.ms = (uint16_t)((uint16_t)lo | ((uint16_t)hi << 8));
+
+        bool ok = false;
+        if (pl.bit <= 7 && mega2IsDiagTest())
+        {
+            uint16_t ms = pl.ms;
+            if (ms < 50)   ms = 50;
+            if (ms > 2000) ms = 2000;
+
+            const bool allow = (!safetyIsEmergencyActive() && !safetyIsLocked());
+            if (allow)
+            {
+                s_diagPulseBit = pl.bit;
+                s_diagPulseMs  = ms;
+                s_diagPulseReq = true;
+                ok = true;
+            }
+        }
+
+        s_cmdResponseOk      = ok ? 1 : 0;
+        s_cmdResponsePending = true;
+        return;
+    }
+
     // --------------------------------------------------
     // Bestehende GET-Kommandos
     // --------------------------------------------------
@@ -710,6 +838,39 @@ void megaI2C_begin()
 // ------------------------------------------------------------
 void megaI2C_update()
 {
+    // ------------------------------------------------------------
+    // DIAG relay pulse sequencer (turnout coils W12..W15)
+    // - executed in loop context (not in i2cOnReceive)
+    // - active-low: pulse drives pin LOW, then releases to HIGH
+    // ------------------------------------------------------------
+    {
+        const uint32_t nowMs = (uint32_t)millis();
+
+        // Finish active pulse
+        if (s_diagPulseActive && (int32_t)(nowMs - s_diagPulseEndMs) >= 0)
+        {
+            digitalWrite(s_diagPulsePin, HIGH);
+            s_diagPulseActive = false;
+            pendingSet(M2_PEND_DIAG_RELAYS);
+        }
+
+        // Start new pulse request (one at a time)
+        if (!s_diagPulseActive && s_diagPulseReq)
+        {
+            s_diagPulseReq = false;
+
+            uint8_t pin = 0;
+            if (diagRelayBitToPin(s_diagPulseBit, pin))
+            {
+                s_diagPulsePin    = pin;
+                s_diagPulseEndMs  = nowMs + (uint32_t)s_diagPulseMs;
+                s_diagPulseActive = true;
+                digitalWrite(pin, LOW);
+                pendingSet(M2_PEND_DIAG_RELAYS);
+            }
+        }
+    }
+
     // Selftest-Retry aus UI asynchron starten
     if (s_pendingSelftestRetry)
     {

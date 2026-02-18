@@ -10,7 +10,7 @@
 // "M2EP" (Mega2 <-> ESP)
 #define PROTO_MAGIC   0x4D324550u
 // Bump whenever any wire-visible struct/command meaning changes.
-#define PROTO_VERSION 0x0005u
+#define PROTO_VERSION 0x0006u
 
 // =====================================================
 //  Anlagen-Konstanten (fix)
@@ -216,6 +216,26 @@ struct __attribute__((packed)) Mega2DiagRelaysPayload
 };
 static_assert(sizeof(Mega2DiagRelaysPayload) <= 8, "Mega2DiagRelaysPayload size");
 
+// ------------------------------------------------------------
+// Mega2 DIAG Relay Commands (ESP -> Mega2)
+// - bit index corresponds to Mega2 diag relay telemetry mask
+// - on=true means active-low => drive pin LOW
+// - pulse: start active then auto-release after ms (handled on Mega2)
+// ------------------------------------------------------------
+struct __attribute__((packed)) Mega2DiagRelaySetPayload
+{
+    uint8_t bit;
+    uint8_t on; // 0/1
+};
+static_assert(sizeof(Mega2DiagRelaySetPayload) == 2, "Mega2DiagRelaySetPayload size");
+
+struct __attribute__((packed)) Mega2DiagRelayPulsePayload
+{
+    uint8_t  bit;
+    uint16_t ms;
+};
+static_assert(sizeof(Mega2DiagRelayPulsePayload) == 3, "Mega2DiagRelayPulsePayload size");
+
 // Canonical command enum (Mega2 uses these symbols)
 enum Mega2Command : uint8_t {
     CMD_GET_M2_SAFETY = 0x20,
@@ -229,5 +249,11 @@ enum Mega2Command : uint8_t {
     CMD_GET_M2_DIAG_SENSORS = 0x28,
     CMD_GET_M2_DIAG_RELAYS  = 0x29,
 
+    CMD_SET_M2_DIAG_RELAY   = 0x2A,
+    CMD_PULSE_M2_DIAG_RELAY = 0x2B,
+
 };
 
+// Compatibility aliases (legacy M2_CMD_* users on ESP side)
+static constexpr uint8_t M2_CMD_SET_DIAG_RELAY   = (uint8_t)CMD_SET_M2_DIAG_RELAY;
+static constexpr uint8_t M2_CMD_PULSE_DIAG_RELAY = (uint8_t)CMD_PULSE_M2_DIAG_RELAY;
