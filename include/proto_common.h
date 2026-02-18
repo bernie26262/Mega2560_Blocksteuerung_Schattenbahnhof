@@ -10,7 +10,7 @@
 // "M2EP" (Mega2 <-> ESP)
 #define PROTO_MAGIC   0x4D324550u
 // Bump whenever any wire-visible struct/command meaning changes.
-#define PROTO_VERSION 0x0004u
+#define PROTO_VERSION 0x0005u
 
 // =====================================================
 //  Anlagen-Konstanten (fix)
@@ -158,6 +158,7 @@ enum : uint16_t {
     M2_PEND_SHADOW       = 1u << 4,
     M2_PEND_TURNOUTS     = 1u << 5,  // Turnouts IST/SOLL (SBHF)
     M2_PEND_DIAG_SENSORS = 1u << 6,  // Mega2 diag sensor snapshot (kontakt + schaltgleise)
+    M2_PEND_DIAG_RELAYS  = 1u << 7,  // Mega2 diag relay pin levels (active-low)
 
     M2_PEND_ALL_DIGITAL  = M2_PEND_SAFETY | M2_PEND_ENTRY | M2_PEND_ENTRY_PREV | M2_PEND_BLOCKS | M2_PEND_SHADOW | M2_PEND_TURNOUTS,
 };
@@ -208,6 +209,13 @@ static_assert(sizeof(Mega2DiagSensorsPayload) == M2_DIAG_SENSORS_WIRE_SIZE,
               "PROTO drift: Mega2DiagSensorsPayload wire size mismatch");
 static_assert(sizeof(Mega2DiagSensorsPayload) <= 32, "Mega2DiagSensorsPayload must fit Wire buffer");
 
+struct __attribute__((packed)) Mega2DiagRelaysPayload
+{
+    uint8_t  seq;
+    uint32_t levelMask; // bit i: 1=LOW(aktiv), 0=HIGH(inaktiv)
+};
+static_assert(sizeof(Mega2DiagRelaysPayload) <= 8, "Mega2DiagRelaysPayload size");
+
 // Canonical command enum (Mega2 uses these symbols)
 enum Mega2Command : uint8_t {
     CMD_GET_M2_SAFETY = 0x20,
@@ -219,6 +227,7 @@ enum Mega2Command : uint8_t {
     CMD_GET_M2_PENDING_MASK = 0x26,
     CMD_GET_M2_TURNOUTS     = 0x27,
     CMD_GET_M2_DIAG_SENSORS = 0x28,
+    CMD_GET_M2_DIAG_RELAYS  = 0x29,
 
 };
 

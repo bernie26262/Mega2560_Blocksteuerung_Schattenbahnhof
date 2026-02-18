@@ -105,13 +105,13 @@ void ShadowYardController::onS11()
 {
     if (m_state == SBhfState::Error)
     {
-        DBG_PRINTLN("[SBHF] S11 ignored because SBhfState::Error");
+        DBG_PRINTLN(F("[SBHF] S11 ignored because SBhfState::Error"));
         return;
     }
 
     if (safetyIsLocked() || safetyIsEmergencyActive() || m_selftestActive)
     {
-        DBG_PRINTLN("[SBHF] S11 ignored (SAFETY-LOCK)");
+        DBG_PRINTLN(F("[SBHF] S11 ignored (SAFETY-LOCK)"));
         return;
     }
 
@@ -127,7 +127,7 @@ void ShadowYardController::onS12()
 {
     if (m_state == SBhfState::Error)
     {
-        DBG_PRINTLN("[SBHF] S12 ignored (ERROR-LOCK)");
+        DBG_PRINTLN(F("[SBHF] S12 ignored (ERROR-LOCK)"));
         return;
     }
 
@@ -144,7 +144,7 @@ void ShadowYardController::onS13()
 {
     if (m_state == SBhfState::Error)
     {
-        DBG_PRINTLN("[SBHF] S13 ignored (ERROR-LOCK)");
+        DBG_PRINTLN(F("[SBHF] S13 ignored (ERROR-LOCK)"));
         return;
     }
 
@@ -161,7 +161,7 @@ void ShadowYardController::onS14()
 {
     if (m_state == SBhfState::Error)
     {
-        DBG_PRINTLN("[SBHF] S14 ignored (ERROR-LOCK)");
+        DBG_PRINTLN(F("[SBHF] S14 ignored (ERROR-LOCK)"));
         return;
     }
 
@@ -178,26 +178,26 @@ void ShadowYardController::onS15()
 {
     if (m_state == SBhfState::Error)
     {
-        DBG_PRINTLN("[SBHF] S15 ignored (ERROR-LOCK)");
+        DBG_PRINTLN(F("[SBHF] S15 ignored (ERROR-LOCK)"));
         return;
     }
 
     // S15: Nothaltgleis EIN (Freigabe)
     g_power.setNothalt(false);
-    DBG_PRINTLN("[SBHF] S15 -> Nothalt frei (Gleis EIN)");
+    DBG_PRINTLN(F("[SBHF] S15 -> Nothalt frei (Gleis EIN)"));
 }
 
 void ShadowYardController::onS16()
 {
     if (m_state == SBhfState::Error)
     {
-        DBG_PRINTLN("[SBHF] S16 ignored (ERROR-LOCK)");
+        DBG_PRINTLN(F("[SBHF] S16 ignored (ERROR-LOCK)"));
         return;
     }
 
     // S16: Nothaltgleis AUS (Stopzone scharf)
     g_power.setNothalt(true);
-    DBG_PRINTLN("[SBHF] S16 -> Nothalt aktiv (Gleis AUS)");
+    DBG_PRINTLN(F("[SBHF] S16 -> Nothalt aktiv (Gleis AUS)"));
 
     // KEIN Hard-Error hier!
 }
@@ -526,15 +526,15 @@ void ShadowYardController::onResetAck()
         // Aussagekräftiger statt "conditions not met"
         if (m_state != SBhfState::Error)
         {
-            DBG_PRINTLN("[SBHF] RESET ignored (not in Error)");
+            DBG_PRINTLN(F("[SBHF] RESET ignored (not in Error)"));
         }
         else if (m_exitPowerOn)
         {
-            DBG_PRINTLN("[SBHF] RESET ignored (exit power still on)");
+            DBG_PRINTLN(F("[SBHF] RESET ignored (exit power still on)"));
         }
         else
         {
-            DBG_PRINTLN("[SBHF] RESET ignored (conditions not met)");
+            DBG_PRINTLN(F("[SBHF] RESET ignored (conditions not met)"));
         }
         return;
     }
@@ -563,7 +563,7 @@ void ShadowYardController::onResetAck()
         m_resumeGleis = 0;
         m_resumeState = SBhfState::Idle;
 
-        DBG_PRINTLN("[SBHF] Resuming after reset from checkpoint");
+        DBG_PRINTLN(F("[SBHF] Resuming after reset from checkpoint"));
     }
     else
     {
@@ -631,7 +631,7 @@ bool ShadowYardController::startSelftestImpl(bool includeNonCritical, bool allow
     // Zusätzlich: SBHF-Abgänge/Relais definiert AUS, um Altlasten zu vermeiden.
     // ------------------------------------------------------------
     if (g_power.isMainPowerOn())
-        DBG_PRINTLN("[SBHF] Selftest: main power ON -> turning OFF");
+        DBG_PRINTLN(F("[SBHF] Selftest: main power ON -> turning OFF"));
     g_power.setMainPower(false);
     m_selftestForcedPowerOff = true;
 
@@ -676,7 +676,7 @@ bool ShadowYardController::startSelftestImpl(bool includeNonCritical, bool allow
         m_stT[i].expAbbiegenBit = 0xFF;
     }
 
-    DBG_PRINTLN("[SBHF] Selftest started");
+    DBG_PRINTLN(F("[SBHF] Selftest started"));
     m_stLoggedThisRun = false;   // pro Selftest neu loggen
     DBG_PRINTF("[SBHF] ST pipeline init: includeNonCritical=%u\n", (unsigned)m_selftestIncludeNonCritical);
     
@@ -892,7 +892,7 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
             {
                 m_selftestPhase   = ST_ABBIEGEN;
                 m_selftestNextIdx = 0;
-                DBG_PRINTLN("[SBHF] ST phase switch -> ABBIEGEN");
+                DBG_PRINTLN(F("[SBHF] ST phase switch -> ABBIEGEN"));
             }
 
             // Kein return hier: Abbiegen kann im nächsten Tick starten
@@ -1014,6 +1014,6 @@ void ShadowYardController::selftestFinish()
     // Hinweis: Wenn wir Power für den Selftest bewusst ausgeschaltet haben,
     // bleibt sie absichtlich AUS. User muss danach manuell wieder einschalten.
     if (m_selftestForcedPowerOff && !g_power.isMainPowerOn())
-        DBG_PRINTLN("[SBHF] Selftest finished: MAIN POWER remains OFF (manual power-on required)");
+        DBG_PRINTLN(F("[SBHF] Selftest finished: MAIN POWER remains OFF (manual power-on required)"));
     m_selftestForcedPowerOff = false; // one-shot
 }

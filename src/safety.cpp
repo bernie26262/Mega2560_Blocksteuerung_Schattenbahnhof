@@ -252,7 +252,7 @@ bool safetyResetEmergency()
         {
             if (shadowController.startSelftest(true /*include W14/W15*/))
             {
-                DBG_PRINTLN("[SAFETY] Selftest retry started (unlocked)");
+                DBG_PRINTLN(F("[SAFETY] Selftest retry started (unlocked)"));
             }
         }
         return true;
@@ -287,7 +287,7 @@ bool safetyResetEmergency()
     {
         if (isTrafoUntenPowered())
         {
-            DBG_PRINTLN("[SAFETY] ACK blocked (SSR_STUCK): Trafo unten still powered");
+            DBG_PRINTLN(F("[SAFETY] ACK blocked (SSR_STUCK): Trafo unten still powered"));
             return false;
         }
 
@@ -307,7 +307,7 @@ bool safetyResetEmergency()
     {
         if (k_nothalt.raw())
         {
-            DBG_PRINTLN("[SAFETY] ACK blocked (NOTAUS): Stopzone contact still occupied");
+            DBG_PRINTLN(F("[SAFETY] ACK blocked (NOTAUS): Stopzone contact still occupied"));
             return false;
         }
 
@@ -336,20 +336,20 @@ bool safetyResetEmergency()
         {
             s_sbhfSelftestPending = true;
             s_sbhfSelftestStartMs = millis();
-            DBG_PRINTLN("[SAFETY] ACK accepted (SBH_WEICHE): selftest already running");
+            DBG_PRINTLN(F("[SAFETY] ACK accepted (SBH_WEICHE): selftest already running"));
             return true;
         }
 
         if (!shadowController.startSelftest(true /*include W14/W15*/))
         {
-            DBG_PRINTLN("[SAFETY] ACK blocked (SBH_WEICHE): selftest could not start");
+            DBG_PRINTLN(F("[SAFETY] ACK blocked (SBH_WEICHE): selftest could not start"));
             return false;
         }
 
         s_sbhfSelftestPending = true;
         s_sbhfSelftestStartMs = millis();
 
-        DBG_PRINTLN("[SAFETY] ACK accepted (SBH_WEICHE): selftest started");
+        DBG_PRINTLN(F("[SAFETY] ACK accepted (SBH_WEICHE): selftest started"));
         return true;
     }
 
@@ -379,7 +379,7 @@ bool safetyResetEmergency()
     // ------------------------------------------------------------
     if (err.type == SAFETY_ERR_CONTROLLER_FAULT)
     {
-        DBG_PRINTLN("[SAFETY] ACK accepted (CTRL_FAULT): reinit safety subsystem (boot-lock)");
+        DBG_PRINTLN(F("[SAFETY] ACK accepted (CTRL_FAULT): reinit safety subsystem (boot-lock)"));
 
         safetyErrorClear();
         s_emergencyActive = false;
@@ -412,7 +412,7 @@ void safetyNotifySbhfSelftestStarted()
     s_sbhfSelftestPending = true;
     s_sbhfSelftestStartMs = millis();
 
-    DBG_PRINTLN("[SAFETY] SBHF selftest pending set (external start)");
+    DBG_PRINTLN(F("[SAFETY] SBHF selftest pending set (external start)"));
 }
 
 
@@ -449,7 +449,7 @@ void safetyUpdate()
         {
             safetyErrorSet(SAFETY_ERR_CONTROLLER_FAULT, 1); // tick gap
             safetySetEmergency(true);
-            DBG_PRINTLN("[SAFETY] EMERG_CONTROLLER_FAULT(tick-gap) -> ALL OFF, LOCK");
+            DBG_PRINTLN(F("[SAFETY] EMERG_CONTROLLER_FAULT(tick-gap) -> ALL OFF, LOCK"));
             s_lastSafetyUpdateMs = now;
             return;
         }
@@ -459,7 +459,7 @@ void safetyUpdate()
         {
             safetyErrorSet(SAFETY_ERR_CONTROLLER_FAULT, 2); // inkonsistent
             safetySetEmergency(true);
-            DBG_PRINTLN("[SAFETY] EMERG_CONTROLLER_FAULT(invariant) -> ALL OFF, LOCK");
+            DBG_PRINTLN(F("[SAFETY] EMERG_CONTROLLER_FAULT(invariant) -> ALL OFF, LOCK"));
             s_lastSafetyUpdateMs = now;
             return;
         }
@@ -485,7 +485,7 @@ void safetyUpdate()
             if (allowed == 0)
             {
                 // Kein sicherer Pfad ableitbar -> bleibt LOCKED
-                DBG_PRINTLN("[SAFETY] SBHF selftest FAIL(no-safe) -> still locked");
+                DBG_PRINTLN(F("[SAFETY] SBHF selftest FAIL(no-safe) -> still locked"));
             }
             else
             {
@@ -504,7 +504,7 @@ void safetyUpdate()
         else if ((now - s_sbhfSelftestStartMs) > SBHF_SELFTEST_TIMEOUT_MS)
         {
             s_sbhfSelftestPending = false;
-            DBG_PRINTLN("[SAFETY] SBHF selftest TIMEOUT -> still locked");
+            DBG_PRINTLN(F("[SAFETY] SBHF selftest TIMEOUT -> still locked"));
         }
     }
 
@@ -540,7 +540,7 @@ void safetyUpdate()
 
             safetyErrorSet(SAFETY_ERR_NOTAUS, 6);
 
-            DBG_PRINTLN("[SAFETY] EMERG_REVERSE_ENTRY(Stopzone) -> SSR_A/B OFF, LOCK");
+            DBG_PRINTLN(F("[SAFETY] EMERG_REVERSE_ENTRY(Stopzone) -> SSR_A/B OFF, LOCK"));
             return;
         }
     }

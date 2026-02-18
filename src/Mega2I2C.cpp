@@ -19,12 +19,14 @@ extern uint16_t g_bootId;
 #include "safety.h"
 #include "mega2_debug.h"
 #include "Mega2RunMode.h"
+
+#include "mega2_pins.h" // relay pin constants
  
 // Analog payload (fixed point): see proto_common.h Mega2AnalogPayload
 // ------------------------------------------------------------
 // DataReady (Mega2 -> ESP): active LOW, latched until a digital read is served
 // ------------------------------------------------------------
-constexpr uint8_t PIN_DATA_READY_M2 = 12;
+// constexpr uint8_t PIN_DATA_READY_M2 = 12; (ist in mega2_pins.h definiert)
 
 // ------------------------------------------------------------
 // Externe Controller aus main.cpp
@@ -151,6 +153,10 @@ static volatile uint16_t s_pendingMask = 0;
 static uint8_t           s_pendingSeq  = 0;
 static uint32_t          s_lastDiagReadMs = 0;  // millis of last CMD_GET_M2_DIAG_SENSORS served
 
+// Relay telemetry (diag-only, active-low pin levels)
+static Mega2DiagRelaysPayload s_diagRelaysSnap{};
+static uint32_t               s_lastDiagRelaysReadMs = 0; // millis of last CMD_GET_M2_DIAG_RELAYS served
+
 // Diag snapshot (kontakt + schaltgleise)
 static Mega2DiagSensorsPayload s_diagSnap{};
 static bool     s_diagHasLast = false;
@@ -177,6 +183,41 @@ static inline void incNibble(uint8_t* a, uint8_t idx)
     uint8_t v = getNibble(a, idx);
     v = (uint8_t)((v + 1) & 0x0F);
     setNibble(a, idx, v);
+}
+
+static inline uint32_t buildDiagRelaysMaskActiveLow()
+{
+    uint32_t m = 0;
+    auto add = [&](uint8_t bit, uint8_t pin){
+        if (digitalRead(pin) == LOW) m |= (1UL << bit);
+    };
+
+    uint8_t b = 0;
+    add(b++, PIN_W12_GERADE);
+    add(b++, PIN_W12_ABBIEGEN);
+    add(b++, PIN_W13_GERADE);
+    add(b++, PIN_W13_ABBIEGEN);
+    add(b++, PIN_W14_GERADE);
+    add(b++, PIN_W14_ABBIEGEN);
+    add(b++, PIN_W15_GERADE);
+    add(b++, PIN_W15_ABBIEGEN);
+
+    add(b++, PIN_RELAY_BLOCK1_NACH2);
+    add(b++, PIN_RELAY_BLOCK2_NACH3);
+    add(b++, PIN_RELAY_BLOCK3_NACH4);
+    add(b++, PIN_RELAY_BLOCK4_NACH1);
+    add(b++, PIN_RELAY_BLOCK4_NACH5);
+    add(b++, PIN_RELAY_BLOCK5_NACH_SBH);
+    add(b++, PIN_RELAY_SBH_GL1_NACH6);
+    add(b++, PIN_RELAY_SBH_GL2_NACH6);
+    add(b++, PIN_RELAY_SBH_GL3_NACH6);
+    add(b++, PIN_RELAY_BLOCK6_NACH4);
+
+    add(b++, PIN_RELAY_NOTHALT);
+    add(b++, PIN_RELAY_TRAFO_OBEN_CUT);
+    add(b++, PIN_RELAY_TRAFO_UNTEN_CUT);
+
+    return m;
 }
 
 // Selftest-Retry darf NICHT im I2C-Callback gestartet werden (kann onRequest verhungern lassen)
@@ -260,7 +301,8 @@ void megaI2C_setPending(uint16_t bits)
 bool megaI2C_diagIsActive()
 {
     const uint32_t now = (uint32_t)millis();
-    return (uint32_t)(now - s_lastDiagReadMs) < 2000u;
+    const uint32_t last = (s_lastDiagRelaysReadMs > s_lastDiagReadMs) ? s_lastDiagRelaysReadMs : s_lastDiagReadMs;
+    return (uint32_t)(now - last) < 2000u;
 }
 
 // Backward compatible helper: mark all digital payloads as pending
@@ -594,29 +636,41 @@ void i2cOnRequest()
             break;
         }
 
+        case CMD_GET_M2_DIAG_RELAYS:
+        {
+            s_lastDiagRelaysReadMs = (uint32_t)millis();
+            if (s_diagRelaysSnap.seq == 0) {
+                s_diagRelaysSnap.seq = 1;
+                s_diagRelaysSnap.levelMask = buildDiagRelaysMaskActiveLow();
+            }
+            Wire.write(reinterpret_cast<uint8_t*>(&s_diagRelaysSnap), sizeof(s_diagRelaysSnap));
+            pendingClear(M2_PEND_DIAG_RELAYS);
+            break;
+        }
+
         
-case CMD_GET_M2_ENTRY:
-{
+        case CMD_GET_M2_ENTRY:
+        {
 
-    uint16_t entry[M2_NUM_BLOCKS]{};
+            uint16_t entry[M2_NUM_BLOCKS]{};
 
-    buildEntryMatrix(entry);
-    Wire.write(reinterpret_cast<uint8_t*>(entry), sizeof(entry));
-    pendingClear(M2_PEND_ENTRY);
-    break;
-}
+            buildEntryMatrix(entry);
+            Wire.write(reinterpret_cast<uint8_t*>(entry), sizeof(entry));
+            pendingClear(M2_PEND_ENTRY);
+            break;
+        }
 
-case CMD_GET_M2_ENTRY_PREVIEW:
-{
+        case CMD_GET_M2_ENTRY_PREVIEW:
+        {
 
-    uint16_t entry[M2_NUM_BLOCKS]{};
+            uint16_t entry[M2_NUM_BLOCKS]{};
 
 
-    buildEntryPreviewMatrix(entry);
-    Wire.write(reinterpret_cast<uint8_t*>(entry), sizeof(entry));
-    pendingClear(M2_PEND_ENTRY_PREV);
-    break;
-}
+            buildEntryPreviewMatrix(entry);
+            Wire.write(reinterpret_cast<uint8_t*>(entry), sizeof(entry));
+            pendingClear(M2_PEND_ENTRY_PREV);
+            break;
+        }
 
         default:
             // unbekannt → als Fallback SystemStatus senden (verhindert 0-Reads)
@@ -667,7 +721,7 @@ void megaI2C_update()
         const bool started = shadowController.startSelftestRetry(true);
         if (started)
         {
-            DBG_PRINTLN("[I2C] SBHF selftest retry started");
+            DBG_PRINTLN(F("[I2C] SBHF selftest retry started"));
             safetyNotifySbhfSelftestStarted();
         }
         else         DBG_PRINTF("[I2C] SBHF selftest retry rejected: state=%u selftestActive=%u lock=%u notaus=%u warn=0x%02X allow=0x%02X\n",
@@ -687,7 +741,7 @@ void megaI2C_update()
         const bool started = shadowController.startSelftestStartup(true);
         if (started)
         {
-            DBG_PRINTLN("[I2C] SBHF selftest startup started");
+            DBG_PRINTLN(F("[I2C] SBHF selftest startup started"));
             safetyNotifySbhfSelftestStarted();
         }
         else
@@ -839,6 +893,23 @@ void megaI2C_update()
             if (megaI2C_diagIsActive()) {
                 pendingSet(M2_PEND_DIAG_SENSORS);
             }
+        }
+    }
+
+    // Diag relays snapshot (pin levels, active-low)
+    {
+        const uint32_t relayMask = buildDiagRelaysMaskActiveLow();
+        if (s_diagRelaysSnap.seq == 0)
+        {
+            s_diagRelaysSnap.seq = 1;
+            s_diagRelaysSnap.levelMask = relayMask;
+        }
+        else if (relayMask != s_diagRelaysSnap.levelMask)
+        {
+            s_diagRelaysSnap.levelMask = relayMask;
+            s_diagRelaysSnap.seq = (uint8_t)(s_diagRelaysSnap.seq + 1);
+            if (megaI2C_diagIsActive())
+                pendingSet(M2_PEND_DIAG_RELAYS);
         }
     }
 

@@ -4,6 +4,7 @@
 
 #include "mega2_pins.h"
 #include <EEPROM.h>
+#include "mem_utils.h"
 
 
 #ifndef MEGA2_SIM_MODE
@@ -284,31 +285,30 @@ static void dbgProcessLine(const char* line, bool logCmd)
         // ------------------------------------------------------------
         if (c == '?')
         {
-            DBG_PRINTLN("=== SIM CMD HELP (MEGA2_SIM_MODE=1) ===");
-            DBG_PRINTLN("Single-Key:");
-            DBG_PRINTLN("  d    -> Debug Dump");
-            DBG_PRINTLN("  a    -> ACK senden");
-            DBG_PRINTLN("  n    -> NOTHALT setzen (EMERGENCY)");
-            DBG_PRINTLN("  p    -> POWER ON (wenn erlaubt)");
+            DBG_PRINTLN(F("=== SIM CMD HELP (MEGA2_SIM_MODE=1) ==="));
+            DBG_PRINTLN(F("Single-Key:"));
+            DBG_PRINTLN(F("  d    -> Debug Dump"));
+            DBG_PRINTLN(F("  a    -> ACK senden"));
+            DBG_PRINTLN(F("  n    -> NOTHALT setzen (EMERGENCY)"));
+            DBG_PRINTLN(F("  p    -> POWER ON (wenn erlaubt)"));
 #if MEGA2_SIM_MODE
-            DBG_PRINTLN("  T/t  -> Trafo-Unten Force ON/OFF (SIM)");
-            DBG_PRINTLN("  h/H  -> Stopzone Kontakt Force OCC/FREE (SIM)");
-            DBG_PRINTLN("  1..6 -> SBHF Sensor-Keys S11..S16 (SIM)");
+            DBG_PRINTLN(F("  T/t  -> Trafo-Unten Force ON/OFF (SIM)"));
+            DBG_PRINTLN(F("  h/H  -> Stopzone Kontakt Force OCC/FREE (SIM)"));
+            DBG_PRINTLN(F("  1..6 -> SBHF Sensor-Keys S11..S16 (SIM)"));
 #endif
-            DBG_PRINTLN("");
-            DBG_PRINTLN("Line Commands (Block N=1..9):");
-            DBG_PRINTLN("  oN/ON -> Block belegt/frei");
-            DBG_PRINTLN("  uN/UN -> HARD: BN = 1400mA / OFF (Double-Occ hard)");
-            DBG_PRINTLN("  vN/VN -> BASE: BN = 200mA / OFF (EMA-Basis)");
-            DBG_PRINTLN("  wN/WN -> STEP: BN = 350mA / zurueck auf 200mA");
-            DBG_PRINTLN("  kN/KN -> SHORT ON/OFF (SIM)");
-            DBG_PRINTLN("  xN/XN -> Clear Debug-State (SIM)");
-            DBG_PRINTLN("");
-            DBG_PRINTLN("Beispiele (B2):");
-            DBG_PRINTLN("  Hard:     o2, u2, (>=1s), a, U2, a");
-            DBG_PRINTLN("  Adaptive: o2, v2, (>=2-3s), w2, (>=1s), a, W2, a");
-            DBG_PRINTLN("TESTPLAN v1.2 (B2): Hard=o2 u2 wait a U2 a | Adapt=o2 v2 wait w2 wait a W2 a");
-            DBG_PRINTLN("===================================");
+            DBG_PRINTLN(F("Line Commands (Block N=1..9):"));
+            DBG_PRINTLN(F("  oN/ON -> Block belegt/frei"));
+            DBG_PRINTLN(F("  uN/UN -> HARD: BN = 1400mA / OFF (Double-Occ hard)"));
+            DBG_PRINTLN(F("  vN/VN -> BASE: BN = 200mA / OFF (EMA-Basis)"));
+            DBG_PRINTLN(F("  wN/WN -> STEP: BN = 350mA / zurueck auf 200mA"));
+            DBG_PRINTLN(F("  kN/KN -> SHORT ON/OFF (SIM)"));
+            DBG_PRINTLN(F("  xN/XN -> Clear Debug-State (SIM)"));
+            DBG_PRINTLN(F(""));
+            DBG_PRINTLN(F("Beispiele (B2):"));
+            DBG_PRINTLN(F("  Hard:     o2, u2, (>=1s), a, U2, a"));
+            DBG_PRINTLN(F("  Adaptive: o2, v2, (>=2-3s), w2, (>=1s), a, W2, a"));
+            DBG_PRINTLN(F("TESTPLAN v1.2 (B2): Hard=o2 u2 wait a U2 a | Adapt=o2 v2 wait w2 wait a W2 a"));
+            DBG_PRINTLN(F("==================================="));
             return;
         }
 
@@ -321,7 +321,7 @@ static void dbgProcessLine(const char* line, bool logCmd)
         if (c=='5') g_sbhf.onS15();
         if (c=='6') g_sbhf.onS16();
 #else
-        if (c>='1' && c<='6') { DBG_PRINTLN("[DBG] SIM sensor keys disabled (MEGA2_SIM_MODE=0)"); return; }
+        if (c>='1' && c<='6') { DBG_PRINTLN(F("[DBG] SIM sensor keys disabled (MEGA2_SIM_MODE=0)")); return; }
 #endif
 
         // 'r' nur in SIM (Fehlbedienung in HW vermeiden)
@@ -334,7 +334,8 @@ static void dbgProcessLine(const char* line, bool logCmd)
         if (c == 'p')
         {
             const bool ok = safetyPowerOn();
-            DBG_PRINTLN(ok ? "[DBG] POWER ON OK" : "[DBG] POWER ON BLOCKED");
+            if (ok) DBG_PRINTLN(F("[DBG] POWER ON OK"));
+            else    DBG_PRINTLN(F("[DBG] POWER ON BLOCKED"));
         }
 
         // Power OFF ohne Emergency (nur SSR/Outputs aus)
@@ -346,32 +347,33 @@ static void dbgProcessLine(const char* line, bool logCmd)
             g_power.setSbhfGleis(2, false);
             g_power.setSbhfGleis(3, false);
             g_power.setBlock5ToSBhf(false);
-            DBG_PRINTLN("[DBG] POWER OFF (no emergency)");
+            DBG_PRINTLN(F("[DBG] POWER OFF (no emergency)"));
         }
 
 
         if (c == 'n')
         {
             safetySetEmergency(true);
-            DBG_PRINTLN("[DBG] NOTHALT");
+            DBG_PRINTLN(F("[DBG] NOTHALT"));
         }
 
         if (c == 'a')
         {
             const bool ok = safetyResetEmergency();
-            DBG_PRINTLN(ok ? "[DBG] ACK OK" : "[DBG] ACK BLOCKED");
+            if (ok) DBG_PRINTLN(F("[DBG] ACK OK"));
+            else    DBG_PRINTLN(F("[DBG] ACK BLOCKED"));
         }
 
         // Trafo-Unten Force (SIM only)
 #if MEGA2_SIM_MODE
-        if (c=='T') { safetyDebugForceTrafoUntenPowered(true);  DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=ON"); }
-        if (c=='t') { safetyDebugForceTrafoUntenPowered(false); DBG_PRINTLN("[DBG] TRAFO_UNTEN FORCED=OFF"); }
+        if (c=='T') { safetyDebugForceTrafoUntenPowered(true);  DBG_PRINTLN(F("[DBG] TRAFO_UNTEN FORCED=ON")); }
+        if (c=='t') { safetyDebugForceTrafoUntenPowered(false); DBG_PRINTLN(F("[DBG] TRAFO_UNTEN FORCED=OFF")); }
 
         // Stopzone-Kontakt (k_nothalt) Force (SIM only)
-        if (c=='h') { k_nothalt.debugForce(true);  DBG_PRINTLN("[DBG] K_NOTHALT FORCED=OCC"); }
-        if (c=='H') { k_nothalt.debugForce(false); DBG_PRINTLN("[DBG] K_NOTHALT FORCED=FREE"); }
+        if (c=='h') { k_nothalt.debugForce(true);  DBG_PRINTLN(F("[DBG] K_NOTHALT FORCED=OCC")); }
+        if (c=='H') { k_nothalt.debugForce(false); DBG_PRINTLN(F("[DBG] K_NOTHALT FORCED=FREE")); }
 #else
-        if (c=='T' || c=='t' || c=='h' || c=='H') { DBG_PRINTLN("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)"); return; }
+        if (c=='T' || c=='t' || c=='h' || c=='H') { DBG_PRINTLN(F("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)")); return; }
 #endif
 
         s_forceSysFlagsPrint = true;
@@ -386,7 +388,7 @@ static void dbgProcessLine(const char* line, bool logCmd)
 
     if (n < 1 || n > BLOCK_COUNT)
     {
-        DBG_PRINTLN("[DBG] Block-ID 1..9");
+        DBG_PRINTLN(F("[DBG] Block-ID 1..9"));
         return;
     }
 
@@ -396,7 +398,7 @@ static void dbgProcessLine(const char* line, bool logCmd)
         cmd=='x' || cmd=='X' || cmd=='k' || cmd=='K' ||
         cmd=='u' || cmd=='U' || cmd=='v' || cmd=='V' || cmd=='w' || cmd=='W')
     {
-        DBG_PRINTLN("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)");
+        DBG_PRINTLN(F("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)"));
         return;
     }
 #endif
@@ -446,7 +448,7 @@ static void dbgProcessLine(const char* line, bool logCmd)
             // 'k' => short ON, 'K' => short OFF
             g_bc.debugSetStromShort(n, (cmd == 'k'));
 #else
-            DBG_PRINTLN("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)");
+            DBG_PRINTLN(F("[DBG] SIM cmd disabled (MEGA2_SIM_MODE=0)"));
 #endif
             break;
 
@@ -580,6 +582,14 @@ void setup()
     g_s11.begin(); g_s12.begin(); g_s13.begin();
     g_s14.begin(); g_s15.begin(); g_s16.begin();
 
+    MemUtils::resetMinFree();
+
+    DBG_PRINT(F("[MEM] boot free="));
+    DBG_PRINT(MemUtils::freeMemory());
+    DBG_PRINT(F(" min="));
+    DBG_PRINT(MemUtils::minFreeMemory());
+    DBG_PRINTLN(F(""));
+
 }
 
 // ============================================================================
@@ -657,4 +667,23 @@ void loop()
 
         megaI2C_update();
     }
+    
+#if MEGA2_DEBUG
+    static uint32_t s_lastMemLogMs = 0;
+    
+
+    if ((uint32_t)(now - s_lastMemLogMs) >= 5000u) {
+        s_lastMemLogMs = now;
+
+        const int freeNow = MemUtils::freeMemory();
+        // updateMinFree() brauchst du hier nicht zwingend, minFreeMemory() wird im Setup initialisiert
+        const int minNow  = MemUtils::minFreeMemory();
+
+        DBG_PRINT(F("[MEM] free="));
+        DBG_PRINT(freeNow);
+        DBG_PRINT(F(" min="));
+        DBG_PRINT(minNow);
+        DBG_PRINTLN(F(""));
+    }
+#endif
 }
