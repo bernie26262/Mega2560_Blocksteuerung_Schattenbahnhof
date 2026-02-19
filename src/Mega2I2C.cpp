@@ -2,6 +2,15 @@
 #include <Arduino.h>
 #include <string.h>
 
+#ifndef EE_DEBUG_DIAG_WRITE
+#define EE_DEBUG_DIAG_WRITE 0
+#endif
+#if EE_DEBUG_DIAG_WRITE
+  #define EE_DIAGW(fmt, ...) DBG_PRINTF("[DIAGW] " fmt "\n", ##__VA_ARGS__)
+#else
+  #define EE_DIAGW(...) do{}while(0)
+#endif
+
 extern uint16_t g_bootId;
 
 #include "BlockController.h"
@@ -21,6 +30,17 @@ extern uint16_t g_bootId;
 #include "Mega2RunMode.h"
 
 #include "mega2_pins.h" // relay pin constants
+
+// --- DIAG write response codes (1 byte) ---
+// 0x01 = OK
+// 0x02 = BUSY (pulse already active)
+// 0x00 = FAIL/DENY (generic for now)
+#ifndef M2_DIAG_RESP_OK
+#define M2_DIAG_RESP_OK   0x01
+#define M2_DIAG_RESP_BUSY 0x02
+#define M2_DIAG_RESP_FAIL 0x00
+#endif
+
  
 // Analog payload (fixed point): see proto_common.h Mega2AnalogPayload
 // ------------------------------------------------------------
@@ -561,18 +581,39 @@ void i2cOnReceive(int len)
 
         uint8_t pin = 0;
         const bool on = (pl.on != 0);
+        const bool mapOk = diagRelayBitToPin(pl.bit, pin);
+
+        EE_DIAGW("rx SET_DIAG_RELAY bit=%u on=%u mapOk=%u pin=%u diagTest=%u safetyLock=%u emg=%u",
+                (unsigned)pl.bit, (unsigned)(on?1:0),
+                (unsigned)(mapOk?1:0), (unsigned)pin,
+                (unsigned)(mega2IsDiagTest()?1:0),
+                (unsigned)(safetyIsLocked()?1:0),
+                (unsigned)(safetyIsEmergencyActive()?1:0));
+
 
         bool ok = false;
-        if (diagRelayBitToPin(pl.bit, pin) && mega2IsDiagTest())
+        if (mapOk && mega2IsDiagTest())
         {
-            const bool allowEnable = (!on) || (!safetyIsEmergencyActive() && !safetyIsLocked());
+            // DIAG policy: In DIAG_TEST we intentionally ignore SafetyLock (operator is in manual test mode).
+            // Emergency (Not-Aus) stays hard blocking.
+            const bool allowEnable = (!on) || (!safetyIsEmergencyActive());
             if (allowEnable)
             {
+                EE_DIAGW("SET exec bit=%u on=%u -> pin=%u", (unsigned)pl.bit, (unsigned)(on?1:0), (unsigned)pin);
                 digitalWrite(pin, on ? LOW : HIGH);
                 ok = true;
                 pendingSet(M2_PEND_DIAG_RELAYS);
             }
+            else {
+                EE_DIAGW("gate DENY SET_DIAG_RELAY bit=%u on=%u (emg)", (unsigned)pl.bit, (unsigned)(on?1:0));
+            }
         }
+        else {
+            EE_DIAGW("gate DENY SET_DIAG_RELAY bit=%u (mapOk=%u diagTest=%u)", (unsigned)pl.bit,
+                    (unsigned)(mapOk?1:0), (unsigned)(mega2IsDiagTest()?1:0));
+        }
+
+        EE_DIAGW("tx SET_DIAG_RELAY -> %s", ok?"OK":"FAIL");
 
         s_cmdResponseOk      = ok ? 1 : 0;
         s_cmdResponsePending = true;
@@ -588,7 +629,7 @@ void i2cOnReceive(int len)
     {
         if (len < 1 + (int)sizeof(Mega2DiagRelayPulsePayload))
         {
-            s_cmdResponseOk      = 0;
+            s_cmdResponseOk      = M2_DIAG_RESP_FAIL;
             s_cmdResponsePending = true;
             return;
         }
@@ -598,25 +639,56 @@ void i2cOnReceive(int len)
         const uint8_t lo = Wire.read();
         const uint8_t hi = Wire.read();
         pl.ms = (uint16_t)((uint16_t)lo | ((uint16_t)hi << 8));
+        
+        EE_DIAGW("rx PULSE_DIAG_RELAY bit=%u ms=%u diagTest=%u safetyLock=%u emg=%u",
+                (unsigned)pl.bit, (unsigned)pl.ms,
+                (unsigned)(mega2IsDiagTest()?1:0),
+                (unsigned)(safetyIsLocked()?1:0),
+                (unsigned)(safetyIsEmergencyActive()?1:0));
 
         bool ok = false;
+        uint8_t resp = M2_DIAG_RESP_FAIL;
         if (pl.bit <= 7 && mega2IsDiagTest())
         {
             uint16_t ms = pl.ms;
             if (ms < 50)   ms = 50;
             if (ms > 2000) ms = 2000;
 
-            const bool allow = (!safetyIsEmergencyActive() && !safetyIsLocked());
+            // DIAG policy: ignore SafetyLock in DIAG_TEST; Emergency remains hard blocking.
+            const bool allow = (!safetyIsEmergencyActive());
             if (allow)
             {
-                s_diagPulseBit = pl.bit;
-                s_diagPulseMs  = ms;
-                s_diagPulseReq = true;
-                ok = true;
+                if (s_diagPulseActive)
+                {
+                    // Mega1-style: reject new pulse while one is active -> BUSY
+                    EE_DIAGW("gate BUSY PULSE_DIAG_RELAY bit=%u (active)", (unsigned)pl.bit);
+                    ok = false;
+                    resp = M2_DIAG_RESP_BUSY;
+                }
+                else
+                {
+                    s_diagPulseBit = pl.bit;
+                    s_diagPulseMs  = ms;
+                    s_diagPulseReq = true;
+                    ok = true;
+                    resp = M2_DIAG_RESP_OK;
+                }
+            }
+            else {
+                EE_DIAGW("gate DENY PULSE_DIAG_RELAY bit=%u (emg)", (unsigned)pl.bit);
+                ok = false;
+                resp = M2_DIAG_RESP_FAIL;
             }
         }
+        else {
+            EE_DIAGW("gate DENY PULSE_DIAG_RELAY bit=%u (diagTest=%u)", (unsigned)pl.bit, (unsigned)(mega2IsDiagTest()?1:0));
+            ok = false;
+            resp = M2_DIAG_RESP_FAIL;
+        }
 
-        s_cmdResponseOk      = ok ? 1 : 0;
+        EE_DIAGW("tx PULSE_DIAG_RELAY -> %s resp=0x%02X", ok?"OK":"FAIL", (unsigned)resp);
+
+        s_cmdResponseOk      = resp;
         s_cmdResponsePending = true;
         return;
     }
@@ -767,10 +839,11 @@ void i2cOnRequest()
         case CMD_GET_M2_DIAG_RELAYS:
         {
             s_lastDiagRelaysReadMs = (uint32_t)millis();
-            if (s_diagRelaysSnap.seq == 0) {
-                s_diagRelaysSnap.seq = 1;
-                s_diagRelaysSnap.levelMask = buildDiagRelaysMaskActiveLow();
-            }
+            // Always build a fresh snapshot to avoid stale/jittery UI updates.
+            // This makes relay telemetry deterministic and "immediate" after writes.
+            if (s_diagRelaysSnap.seq == 0) s_diagRelaysSnap.seq = 1;
+            else s_diagRelaysSnap.seq++;
+            s_diagRelaysSnap.levelMask = buildDiagRelaysMaskActiveLow();
             Wire.write(reinterpret_cast<uint8_t*>(&s_diagRelaysSnap), sizeof(s_diagRelaysSnap));
             pendingClear(M2_PEND_DIAG_RELAYS);
             break;
@@ -851,6 +924,7 @@ void megaI2C_update()
         {
             digitalWrite(s_diagPulsePin, HIGH);
             s_diagPulseActive = false;
+            EE_DIAGW("pulse done bit=%u", (unsigned)s_diagPulseBit);
             pendingSet(M2_PEND_DIAG_RELAYS);
         }
 
@@ -865,6 +939,7 @@ void megaI2C_update()
                 s_diagPulsePin    = pin;
                 s_diagPulseEndMs  = nowMs + (uint32_t)s_diagPulseMs;
                 s_diagPulseActive = true;
+                EE_DIAGW("pulse start bit=%u ms=%u", (unsigned)s_diagPulseBit, (unsigned)s_diagPulseMs);
                 digitalWrite(pin, LOW);
                 pendingSet(M2_PEND_DIAG_RELAYS);
             }
