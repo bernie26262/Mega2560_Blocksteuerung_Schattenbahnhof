@@ -16,6 +16,7 @@ extern uint16_t g_bootId;
 #include "Block.h"
 #include "BlockController.h"
 #include "ShadowYardController.h"
+#include "SensorTrafoAC.h"
 
 #include "SensorKontakt.h"
 #include "PulseSensor.h"
@@ -87,6 +88,10 @@ extern PulseSensor g_s13;
 extern PulseSensor g_s14;
 extern PulseSensor g_s15;
 extern PulseSensor g_s16;
+
+// Defined in main.cpp
+extern SensorTrafoAC g_trafoOben;
+extern SensorTrafoAC g_trafoUnten;
 // ------------------------------------------------------------
 // Interner Command-Response-Zustand
 // ------------------------------------------------------------
@@ -784,34 +789,39 @@ void i2cOnRequest()
          
          case CMD_GET_M2_ANALOG:
          {
-             Mega2AnalogPayload p{};
-             p.seq = ++s_analogSeq;
+            Mega2AnalogPayload p{};
+            p.seq = ++s_analogSeq;
 
-             // Raw/Debug mode: keep payload wire-safe, but reinterpret fields.
-             // flags bit4 (0x10): raw counts
-             //   vA10/vB10 carry raw ADC counts (0..1023) from Trafo sensors (A9/A10)
-             //   i_mA[]    carries RMS counts from current sensors (ZMCT103C front-end)
-             p.flags = 0x10;
+            // Raw/Debug mode: keep payload wire-safe, but reinterpret fields.
+            // flags bit4 (0x10): RAW debug mode
+            //   vA10/vB10 carry Vrms * 10 (derived from SensorTrafoAC, not yet calibrated to real track volts)
+            //   i_mA[]    carries RMS counts from current sensors (ZMCT103C front-end), not mA yet
+            p.flags = 0x10;
 
-             // Trafo sensors: send instantaneous ADC counts for now (calibration later)
-             p.vA10 = (uint16_t)analogRead(PIN_ADC_TRAFO_OBEN);   // A9
-             p.vB10 = (uint16_t)analogRead(PIN_ADC_TRAFO_UNTEN);  // A10
+            // Voltage sensors: use computed Vrms (sensor-domain) for stable calibration.
+            // Calibration step later: V_real = (vA10/10.0) * kV  (kV determined with multimeter)
+            const float vA_rms = g_trafoOben.rms();
+            const float vB_rms = g_trafoUnten.rms();
+            const uint16_t vA10 = (vA_rms <= 0.0f) ? 0u : (uint16_t)lroundf(vA_rms * 10.0f);
+            const uint16_t vB10 = (vB_rms <= 0.0f) ? 0u : (uint16_t)lroundf(vB_rms * 10.0f);
+            p.vA10 = vA10;
+            p.vB10 = vB10;
  
              
-             for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++)
-             {
-                 // Blocks are 1-based (g_blocks[0] = nullptr)
-                 Block* b = g_blocks[i + 1];
-                 const uint16_t rmsCounts = b ? b->stromRmsCounts() : 0;
-                 p.i_mA[i] = rmsCounts;
-             }
+            for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++)
+            {
+                // Blocks are 1-based (g_blocks[0] = nullptr)
+                Block* b = g_blocks[i + 1];
+                const uint16_t rmsCounts = b ? b->stromRmsCounts() : 0;
+                p.i_mA[i] = rmsCounts;
+            }
  
-             Wire.write(reinterpret_cast<uint8_t*>(&p), sizeof(p));
+            Wire.write(reinterpret_cast<uint8_t*>(&p), sizeof(p));
 
             // IMPORTANT: analog does NOT clear DRDY (digital-only signal)
              
-             break;
-         }
+            break;
+        }
          case CMD_GET_M2_PENDING_MASK:
         {
             Mega2PendingMaskPayload p{};

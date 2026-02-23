@@ -5,6 +5,28 @@
 #include "Block.h"
 #include "ShadowYardController.h"
 
+#ifndef MEGA2_SIM_MODE
+#define MEGA2_SIM_MODE 0
+#endif
+
+// IntelliSense / build hygiene:
+// Only compile the real simulation when BOTH are true:
+//   MEGA2_SIM_MODE == 1  AND  MEGA2_SIM_COMPILE == 1
+// Otherwise provide a stub (HW builds stay quiet).
+#ifndef MEGA2_SIM_COMPILE
+#define MEGA2_SIM_COMPILE 0
+#endif
+
+#if !(MEGA2_SIM_MODE == 1 && MEGA2_SIM_COMPILE == 1)
+// HW-build: Simulation is not compiled. Provide a tiny stub so IntelliSense stays quiet.
+class SimulationEngine {
+public:
+    void begin() {}
+    void update(uint32_t, Block**, PulseSensor**, ShadowYardController*) {}
+};
+#else
+
+
 class SimulationEngine {
 public:
     SimulationEngine() {}
@@ -86,3 +108,5 @@ private:
         ps->simulateHigh();
     }
 };
+
+#endif // MEGA2_SIM_MODE

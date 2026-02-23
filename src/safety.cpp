@@ -12,6 +12,7 @@
 #include "mega2_debug.h"
 
 #include "proto_mega2.h"
+#include "threshold_values.h"
 
 // ============================================================================
 // Externe Abhängigkeiten (aus main.cpp)
@@ -30,20 +31,20 @@ extern ShadowYardController& shadowController;
 // ============================================================================
 // Konfiguration / Thresholds
 // ============================================================================
-static constexpr uint32_t SHORT_DETECT_MS      = 200;
-static constexpr uint16_t SHORT_THRESHOLD_MA   = 1800;
-static constexpr uint16_t NO_CURRENT_MA        = 100;
+static constexpr uint32_t SHORT_DETECT_MS      = THR_SHORT_DETECT_MS;
+static constexpr uint16_t SHORT_THRESHOLD_MA   = THR_SHORT_MA_EFF;
+static constexpr uint16_t NO_CURRENT_MA        = THR_NO_CURRENT_MA;
 
 // Doppelte Blockbelegung (heuristisch via Strom)
-static constexpr uint16_t DOUBLE_OCC_THRESHOLD_MA = 1200; // TODO: kalibrieren
-static constexpr uint32_t DOUBLE_OCC_DETECT_MS    = 600;
-static constexpr uint32_t POWER_STABLE_MS         = 400;  // nach SSR-Schaltvorgängen keine Fehltrigger
+static constexpr uint16_t DOUBLE_OCC_THRESHOLD_MA = THR_DOUBLE_OCC_MA_EFF;
+static constexpr uint32_t DOUBLE_OCC_DETECT_MS    = THR_DOUBLE_OCC_DETECT_MS;
+static constexpr uint32_t POWER_STABLE_MS         = THR_POWER_STABLE_MS;  // nach SSR-Schaltvorgängen keine Fehltrigger
 // Adaptive Double-Occ (zusätzlich zum Hard-Trigger)
-static constexpr uint32_t DOUBLE_OCC_TAU_MS        = 2000;  // ~2s EMA
-static constexpr uint16_t DOUBLE_OCC_FACTOR_NUM    = 3;     // 1.5x
-static constexpr uint16_t DOUBLE_OCC_FACTOR_DEN    = 2;
-static constexpr uint16_t DOUBLE_OCC_DELTA_MIN_MA  = 120;   // absoluter Sprung
-static constexpr uint16_t DOUBLE_OCC_BASE_MIN_MA   = 80;    // optional: Basis muss "echt" sein
+static constexpr uint32_t DOUBLE_OCC_TAU_MS        = THR_DOUBLE_OCC_TAU_MS;        // ~2s EMA
+static constexpr uint16_t DOUBLE_OCC_FACTOR_NUM    = THR_DOUBLE_OCC_FACTOR_NUM;    // 1.5x
+static constexpr uint16_t DOUBLE_OCC_FACTOR_DEN    = THR_DOUBLE_OCC_FACTOR_DEN;
+static constexpr uint16_t DOUBLE_OCC_DELTA_MIN_MA  = THR_DOUBLE_OCC_DELTA_MIN_MA;  // absoluter Sprung
+static constexpr uint16_t DOUBLE_OCC_BASE_MIN_MA   = THR_DOUBLE_OCC_BASE_MIN_MA;   // optional: Basis muss "echt" sein
 
 
 // Safety-Controller Fault (Watchdog / Invariants)

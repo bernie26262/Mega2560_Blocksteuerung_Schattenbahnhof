@@ -24,6 +24,7 @@
 #include "SensorKontakt.h"
 #include "SensorStrom.h"
 #include "SensorTrafoAC.h"
+#include "threshold_values.h"
 
 #include "PowerControl.h"
 #include "Mega2PowerControl.h"
@@ -115,16 +116,16 @@ SensorKontakt k_bhf4a(PIN_KONTAKT_BHF4_A);
 SensorKontakt k_bhf4b(PIN_KONTAKT_BHF4_B);
 
 // --------------------- STROMSENSOREN ----------------------------------------
-SensorStrom strom1(PIN_ADC_BLOCK1, 8);
-SensorStrom strom2(PIN_ADC_BLOCK2, 8);
-SensorStrom strom3(PIN_ADC_BLOCK3, 8);
-SensorStrom strom4(PIN_ADC_BLOCK4, 8);
-SensorStrom strom5(PIN_ADC_BLOCK5, 8);
-SensorStrom strom6(PIN_ADC_BLOCK6, 8);
+SensorStrom strom1(PIN_ADC_BLOCK1, THR_BLOCK_OCC_COUNTS);
+SensorStrom strom2(PIN_ADC_BLOCK2, THR_BLOCK_OCC_COUNTS);
+SensorStrom strom3(PIN_ADC_BLOCK3, THR_BLOCK_OCC_COUNTS);
+SensorStrom strom4(PIN_ADC_BLOCK4, THR_BLOCK_OCC_COUNTS);
+SensorStrom strom5(PIN_ADC_BLOCK5, THR_BLOCK_OCC_COUNTS);
+SensorStrom strom6(PIN_ADC_BLOCK6, THR_BLOCK_OCC_COUNTS);
 
-SensorStrom stromSbhf1(PIN_ADC_SBH_GL1, 8);
-SensorStrom stromSbhf2(PIN_ADC_SBH_GL2, 8);
-SensorStrom stromSbhf3(PIN_ADC_SBH_GL3, 8);
+SensorStrom stromSbhf1(PIN_ADC_SBH_GL1, THR_BLOCK_OCC_COUNTS);
+SensorStrom stromSbhf2(PIN_ADC_SBH_GL2, THR_BLOCK_OCC_COUNTS);
+SensorStrom stromSbhf3(PIN_ADC_SBH_GL3, THR_BLOCK_OCC_COUNTS);
 
 // --------------------- BLOCK-OBJEKTE ----------------------------------------
 static void initBlocks()
