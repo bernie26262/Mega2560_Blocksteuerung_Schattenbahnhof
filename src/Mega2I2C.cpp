@@ -12,7 +12,8 @@
 #endif
 
 extern uint16_t g_bootId;
-
+#include "config.h"  // g_blocks[]
+#include "Block.h"
 #include "BlockController.h"
 #include "ShadowYardController.h"
 
@@ -646,7 +647,6 @@ void i2cOnReceive(int len)
                 (unsigned)(safetyIsLocked()?1:0),
                 (unsigned)(safetyIsEmergencyActive()?1:0));
 
-        bool ok = false;
         uint8_t resp = M2_DIAG_RESP_FAIL;
         if (pl.bit <= 7 && mega2IsDiagTest())
         {
@@ -662,7 +662,6 @@ void i2cOnReceive(int len)
                 {
                     // Mega1-style: reject new pulse while one is active -> BUSY
                     EE_DIAGW("gate BUSY PULSE_DIAG_RELAY bit=%u (active)", (unsigned)pl.bit);
-                    ok = false;
                     resp = M2_DIAG_RESP_BUSY;
                 }
                 else
@@ -670,23 +669,22 @@ void i2cOnReceive(int len)
                     s_diagPulseBit = pl.bit;
                     s_diagPulseMs  = ms;
                     s_diagPulseReq = true;
-                    ok = true;
                     resp = M2_DIAG_RESP_OK;
                 }
             }
             else {
                 EE_DIAGW("gate DENY PULSE_DIAG_RELAY bit=%u (emg)", (unsigned)pl.bit);
-                ok = false;
                 resp = M2_DIAG_RESP_FAIL;
             }
         }
         else {
             EE_DIAGW("gate DENY PULSE_DIAG_RELAY bit=%u (diagTest=%u)", (unsigned)pl.bit, (unsigned)(mega2IsDiagTest()?1:0));
-            ok = false;
             resp = M2_DIAG_RESP_FAIL;
         }
 
-        EE_DIAGW("tx PULSE_DIAG_RELAY -> %s resp=0x%02X", ok?"OK":"FAIL", (unsigned)resp);
+        EE_DIAGW("tx PULSE_DIAG_RELAY -> %s resp=0x%02X",
+                 (resp == M2_DIAG_RESP_OK) ? "OK" : "FAIL",
+                 (unsigned)resp);
 
         s_cmdResponseOk      = resp;
         s_cmdResponsePending = true;
@@ -787,22 +785,25 @@ void i2cOnRequest()
          case CMD_GET_M2_ANALOG:
          {
              Mega2AnalogPayload p{};
-             p.seq   = ++s_analogSeq;
-             // flags bit1: voltages invalid (solange Trafo-Spannungsmessung noch nicht sauber verdrahtet ist)
-             p.flags = 0x02;
- 
-             // Spannungen bei invalid konsequent auf 0xFFFF setzen (kein Drift-/Floating-Müll im Payload)
-             p.vA10 = 0xFFFF;
-             p.vB10 = 0xFFFF;
+             p.seq = ++s_analogSeq;
+
+             // Raw/Debug mode: keep payload wire-safe, but reinterpret fields.
+             // flags bit4 (0x10): raw counts
+             //   vA10/vB10 carry raw ADC counts (0..1023) from Trafo sensors (A9/A10)
+             //   i_mA[]    carries RMS counts from current sensors (ZMCT103C front-end)
+             p.flags = 0x10;
+
+             // Trafo sensors: send instantaneous ADC counts for now (calibration later)
+             p.vA10 = (uint16_t)analogRead(PIN_ADC_TRAFO_OBEN);   // A9
+             p.vB10 = (uint16_t)analogRead(PIN_ADC_TRAFO_UNTEN);  // A10
  
              
              for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++)
              {
-                 // Authoritative source: gefilterter Strom in mA aus BlockController
-                 int32_t mA = (int32_t)blockController.stromFiltered(i);
-                 if (mA < 0) mA = 0;
-                 if (mA > 5000) mA = 5000; // Plausibilitätsgrenze (UI erwartet typ. <= ~1500)
-                 p.i_mA[i] = (uint16_t)mA;
+                 // Blocks are 1-based (g_blocks[0] = nullptr)
+                 Block* b = g_blocks[i + 1];
+                 const uint16_t rmsCounts = b ? b->stromRmsCounts() : 0;
+                 p.i_mA[i] = rmsCounts;
              }
  
              Wire.write(reinterpret_cast<uint8_t*>(&p), sizeof(p));

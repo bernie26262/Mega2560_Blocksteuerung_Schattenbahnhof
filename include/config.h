@@ -34,4 +34,4 @@
 // -------------------------------------------------------------
 
 class Block;
-extern Block* g_blocks[NUM_BLOCKS];
+extern Block* g_blocks[];
