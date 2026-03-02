@@ -1,6 +1,7 @@
 #include "Mega2Debug.h"
 #include "mega2_debug.h"
 #include "BlockController.h"
+#include <math.h>
 #include "ShadowYardController.h"
 #include "safety.h"
 #include "safety_error.h"
@@ -54,12 +55,62 @@ void mega2DebugAnalogTick(uint32_t nowMs)
 
     DBG_PRINT(F(" | TOben="));
     DBG_PRINT(g_trafoOben.rms());
-    DBG_PRINT(F("V pow="));
+    DBG_PRINT(F("V adc="));
+    {
+        const uint16_t adc_mV = (uint16_t)lroundf(g_trafoOben.rmsAdc() * 1000.0f);
+        DBG_PRINT(adc_mV);
+        DBG_PRINT(F("mV"));
+    }
+    DBG_PRINT(F(" pow="));
     DBG_PRINT(g_trafoOben.isPowered());
+
     DBG_PRINT(F(" | TUnten="));
     DBG_PRINT(g_trafoUnten.rms());
-    DBG_PRINT(F("V pow="));
+    DBG_PRINT(F("V adc="));
+    {
+        const uint16_t adc_mV = (uint16_t)lroundf(g_trafoUnten.rmsAdc() * 1000.0f);
+        DBG_PRINT(adc_mV);
+        DBG_PRINT(F("mV"));
+    }
+    DBG_PRINT(F(" pow="));
     DBG_PRINTLN(g_trafoUnten.isPowered());
+}
+#endif
+
+// ------------------------------------------------------------
+// Optional: 1x/s Loop-Timing – temporär fürs Bring-up
+// Aktivieren per build_flag: -DDEBUG_LOOP_PERFORMANCE=1
+ // ------------------------------------------------------------
+#ifndef DEBUG_LOOP_PERFORMANCE
+#define DEBUG_LOOP_PERFORMANCE 0
+#endif
+
+#ifndef DEBUG_LOOP_PERFORMANCE_LOG
+#define DEBUG_LOOP_PERFORMANCE_LOG 0
+#endif
+
+#if DEBUG_LOOP_PERFORMANCE
+static uint32_t s_loopTickLastMs = 0;
+static uint32_t s_loopCount = 0;
+static uint32_t s_loopMaxGapUs = 0;
+
+void mega2DebugLoopTick(uint32_t nowMs, uint32_t loopDtUs)
+{
+    s_loopCount++;
+    if (loopDtUs > s_loopMaxGapUs) s_loopMaxGapUs = loopDtUs;
+
+    if (nowMs - s_loopTickLastMs < 1000u) return;
+    const uint32_t dt = nowMs - s_loopTickLastMs;
+    s_loopTickLastMs = nowMs;
+
+    const uint32_t hz = (dt > 0) ? (uint32_t)((s_loopCount * 1000UL) / dt) : 0;
+    
+#if DEBUG_LOOP_PERFORMANCE_LOG
+    DBG_PRINTF("[LOOP] hz=%lu maxGapUs=%lu\n", (unsigned long)hz, (unsigned long)s_loopMaxGapUs);
+#endif
+
+    s_loopCount = 0;
+    s_loopMaxGapUs = 0;
 }
 #endif
 

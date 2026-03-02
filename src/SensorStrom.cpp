@@ -1,5 +1,6 @@
 #include "SensorStrom.h"
 #include <math.h>
+#include <Arduino.h>
 
 SensorStrom::SensorStrom(uint8_t pin,
                          uint16_t thresholdCounts,
@@ -10,7 +11,10 @@ SensorStrom::SensorStrom(uint8_t pin,
       m_thresholdCounts(thresholdCounts),
       m_mvPerAmp(mvPerAmp),
       m_vref_mV(vref_mV),
-      m_adcMax(adcMax)
+      m_adcMax(adcMax),
+      m_threshold_mA(0),
+      m_scaleNum(0),
+      m_scaleDen(0)
 {}
 
 void SensorStrom::begin()
@@ -74,6 +78,12 @@ uint16_t SensorStrom::rmsCounts() const
 
 bool SensorStrom::overThreshold() const
 {
+    // Prefer mA threshold if configured AND scaling is available
+    if (m_threshold_mA > 0) {
+        const uint16_t ma = rms_mA();
+        if (ma > 0) return ma >= m_threshold_mA;
+        // If scaling not available yet, fall back to counts threshold
+    }
     return rmsCounts() >= m_thresholdCounts;
 }
 
@@ -82,8 +92,28 @@ void SensorStrom::setThresholdCounts(uint16_t t)
     m_thresholdCounts = t;
 }
 
+void SensorStrom::setThreshold_mA(uint16_t t)
+{
+    m_threshold_mA = t;
+}
+
+void SensorStrom::setScaleCountsToMA(uint16_t num, uint16_t den)
+{
+    if (den == 0) { m_scaleNum = 0; m_scaleDen = 0; return; }
+    m_scaleNum = num;
+    m_scaleDen = den;
+}
+
 uint16_t SensorStrom::rms_mA() const
 {
+    // Preferred: fixed-point counts->mA scaling (configured via setScaleCountsToMA()).
+    if (m_scaleDen != 0)
+    {
+        const uint32_t mA = (uint32_t(rmsCounts()) * uint32_t(m_scaleNum) + (uint32_t(m_scaleDen) / 2u)) / uint32_t(m_scaleDen);
+        return (uint16_t)((mA > 65535u) ? 65535u : mA);
+    }
+
+    // Fallback: derive mA from mvPerAmp (if configured).
     if (m_mvPerAmp == 0) return 0;
 
     // Counts -> mV (RMS-Abweichung)
@@ -93,4 +123,41 @@ uint16_t SensorStrom::rms_mA() const
     const uint32_t mA = (mv * 1000u) / m_mvPerAmp;
 
     return (uint16_t)((mA > 65535u) ? 65535u : mA);
+}
+
+uint16_t SensorStrom::measureRmsCountsBlocking(uint16_t freqHz, uint8_t periods) const
+{
+    if (freqHz == 0) freqHz = 50;
+    if (periods == 0) periods = 1;
+
+    const uint32_t periodUs = 1000000UL / (uint32_t)freqHz;
+    const uint32_t totalUs  = periodUs * (uint32_t)periods;
+
+    // --- Phase 1: Zeropoint (DC offset) as mean over totalUs
+    uint32_t sum = 0;
+    uint32_t n   = 0;
+
+    const uint32_t t0 = micros();
+    while ((uint32_t)(micros() - t0) < totalUs) {
+        sum += (uint16_t)analogRead(m_pin);
+        n++;
+    }
+    if (n == 0) return 0;
+    const uint16_t zero = (uint16_t)(sum / n);
+
+    // --- Phase 2: Mean square over totalUs (deviation around zero)
+    uint32_t sumSq = 0;
+    uint32_t n2    = 0;
+
+    const uint32_t t1 = micros();
+    while ((uint32_t)(micros() - t1) < totalUs) {
+        const int32_t d = (int32_t)(uint16_t)analogRead(m_pin) - (int32_t)zero;
+        sumSq += (uint32_t)(d * d);
+        n2++;
+    }
+    if (n2 == 0) return 0;
+
+    // RMS = sqrt(mean(d^2))
+    const uint32_t meanSq = sumSq / n2;
+    return (uint16_t)sqrt((double)meanSq);
 }

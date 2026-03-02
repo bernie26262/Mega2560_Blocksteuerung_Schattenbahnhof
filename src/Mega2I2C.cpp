@@ -17,6 +17,7 @@ extern uint16_t g_bootId;
 #include "BlockController.h"
 #include "ShadowYardController.h"
 #include "SensorTrafoAC.h"
+#include "threshold_values.h"
 
 #include "SensorKontakt.h"
 #include "PulseSensor.h"
@@ -171,7 +172,7 @@ static void buildEntryPreviewMatrix(uint16_t entry[M2_NUM_BLOCKS])
 static bool    s_cmdResponsePending = false;
 static uint8_t s_cmdResponseOk      = 0;
 static uint8_t s_pendingResponse    = 0;
-static uint8_t s_analogSeq          = 0;
+// analog seq is generated in main.cpp snapshot builder
 static bool    s_drdyActiveLow      = false;
 
 // Pending mask for DRDY-driven digital payloads (see proto_common.h M2_PEND_*)
@@ -294,11 +295,27 @@ static uint32_t s_diagPulseEndMs  = 0;
 static volatile bool s_pendingSelftestRetry = false;
 static volatile bool s_pendingSelftestStartup = false;
 
+// ------------------------------------------------------------
+// DRDY open-drain emulation (active LOW):
+//  - LOW: drive OUTPUT LOW
+//  - HIGH: release (INPUT = high-Z), external pull-up pulls HIGH
+// ------------------------------------------------------------
+static inline void drdyAssertLow()
+{
+    pinMode(PIN_DATA_READY_M2, OUTPUT);
+    digitalWrite(PIN_DATA_READY_M2, LOW);;
+}
+
+static inline void drdyReleaseHigh()
+{
+    pinMode(PIN_DATA_READY_M2, INPUT); // high-Z, pull-up is external (levelshifter/ESP side)
+}
+
 static inline void drdySetLow()
 {
     if (!s_drdyActiveLow)
     {
-        digitalWrite(PIN_DATA_READY_M2, LOW);
+        drdyAssertLow();
         s_drdyActiveLow = true;
     }
 }
@@ -307,7 +324,7 @@ static inline void drdySetHigh()
 {
     if (s_drdyActiveLow)
     {
-        digitalWrite(PIN_DATA_READY_M2, HIGH);
+        drdyReleaseHigh();
         s_drdyActiveLow = false;
     }
 }
@@ -789,34 +806,12 @@ void i2cOnRequest()
          
          case CMD_GET_M2_ANALOG:
          {
-            Mega2AnalogPayload p{};
-            p.seq = ++s_analogSeq;
+            extern Mega2AnalogPayload g_analogSnapBuf[2];
+            extern volatile uint8_t g_analogSnapIdx;
 
-            // Raw/Debug mode: keep payload wire-safe, but reinterpret fields.
-            // flags bit4 (0x10): RAW debug mode
-            //   vA10/vB10 carry Vrms * 10 (derived from SensorTrafoAC, not yet calibrated to real track volts)
-            //   i_mA[]    carries RMS counts from current sensors (ZMCT103C front-end), not mA yet
-            p.flags = 0x10;
-
-            // Voltage sensors: use computed Vrms (sensor-domain) for stable calibration.
-            // Calibration step later: V_real = (vA10/10.0) * kV  (kV determined with multimeter)
-            const float vA_rms = g_trafoOben.rms();
-            const float vB_rms = g_trafoUnten.rms();
-            const uint16_t vA10 = (vA_rms <= 0.0f) ? 0u : (uint16_t)lroundf(vA_rms * 10.0f);
-            const uint16_t vB10 = (vB_rms <= 0.0f) ? 0u : (uint16_t)lroundf(vB_rms * 10.0f);
-            p.vA10 = vA10;
-            p.vB10 = vB10;
- 
-             
-            for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++)
-            {
-                // Blocks are 1-based (g_blocks[0] = nullptr)
-                Block* b = g_blocks[i + 1];
-                const uint16_t rmsCounts = b ? b->stromRmsCounts() : 0;
-                p.i_mA[i] = rmsCounts;
-            }
- 
-            Wire.write(reinterpret_cast<uint8_t*>(&p), sizeof(p));
+            // Snapshot is built in loop() (non-ISR). Here we only serve it.
+            const uint8_t idx = g_analogSnapIdx;
+            Wire.write(reinterpret_cast<uint8_t*>(&g_analogSnapBuf[idx]), sizeof(Mega2AnalogPayload));
 
             // IMPORTANT: analog does NOT clear DRDY (digital-only signal)
              
@@ -912,8 +907,7 @@ void megaI2C_begin()
     Serial.println(g_bootId);
 
     // DRDY pin init: idle HIGH (not ready), active LOW (data ready)
-    pinMode(PIN_DATA_READY_M2, OUTPUT);
-    digitalWrite(PIN_DATA_READY_M2, HIGH);
+    drdyReleaseHigh();         // idle = released HIGH (via pull-up)
     s_drdyActiveLow = false;
 }
 

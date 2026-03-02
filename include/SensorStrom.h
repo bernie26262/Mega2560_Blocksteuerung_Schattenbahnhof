@@ -19,20 +19,33 @@ public:
     uint16_t offset() const;
     uint16_t absDevCounts() const;
     uint16_t rmsCounts() const;
-
     bool overThreshold() const;
 
     void setThresholdCounts(uint16_t t);
+    void setThreshold_mA(uint16_t t);
+
+    // Fixed-point scaling: i_mA = (rmsCounts * num + den/2) / den
+    void setScaleCountsToMA(uint16_t num, uint16_t den);
+
     uint16_t rms_mA() const;
+
+    // Blocking RMS measurement over full AC periods (for CALIB/diagnostics).
+    // Returns RMS in ADC counts (deviation around computed zeropoint).
+    uint16_t measureRmsCountsBlocking(uint16_t freqHz = 50, uint8_t periods = 2) const;
 
 private:
     uint8_t  m_pin;
     uint16_t m_thresholdCounts;
+    uint16_t m_threshold_mA = 0;
 
     // Optional scaling
     uint16_t m_mvPerAmp;
     uint16_t m_vref_mV;
     uint16_t m_adcMax;
+
+    // Fixed-point counts->mA scaling (preferred). If m_scaleDen==0 => disabled.
+    uint16_t m_scaleNum = 0;
+    uint16_t m_scaleDen = 0;
 
     // State
     bool     m_hasInit = false;

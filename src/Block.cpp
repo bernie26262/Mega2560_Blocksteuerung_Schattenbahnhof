@@ -64,9 +64,6 @@ void Block::begin()
         kontaktOcc(m_kontakt2) ||
         kontaktOcc(m_kontakt3);
 
-    // Strom: erst updaten, dann auswerten
-    if (m_strom)
-        m_strom->update();
     const bool nowStrom = (m_strom ? m_strom->overThreshold() : false);
 
     m_kontaktAktiv = nowKontakt;
@@ -86,9 +83,6 @@ void Block::update(uint32_t nowMs)
         kontaktOcc(m_kontakt2) ||
         kontaktOcc(m_kontakt3);
 
-    // Stromsensor zyklisch updaten (damit overThreshold() auf aktuellen Samples basiert)
-    if (m_strom)
-        m_strom->update();
     const bool nowStrom = (m_strom ? m_strom->overThreshold() : false);
 
     // Kontakt-Edge
@@ -160,6 +154,11 @@ bool Block::besetzt() const
 uint16_t Block::stromRmsCounts() const
 {
     return m_strom ? m_strom->rmsCounts() : 0;
+}
+
+uint16_t Block::stromRmsCountsBlocking(uint16_t freqHz, uint8_t periods) const
+{
+    return m_strom ? m_strom->measureRmsCountsBlocking(freqHz, periods) : 0;
 }
 
 uint16_t Block::stromRms_mA() const

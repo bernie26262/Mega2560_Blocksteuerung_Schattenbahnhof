@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <string.h>
+#include <math.h>
 
 #include "mega2_pins.h"
 #include <EEPROM.h>
@@ -38,6 +39,7 @@
 #include "Mega2Debug.h"
 #include "Mega2Status.h"
 #include "Mega2RunMode.h"
+#include <util/atomic.h>
 
 // ============================================================================
 // GLOBALE OBJEKTE
@@ -97,6 +99,24 @@ Mega2PowerControl g_power;
 SensorTrafoAC g_trafoOben(PIN_ADC_TRAFO_OBEN);
 SensorTrafoAC g_trafoUnten(PIN_ADC_TRAFO_UNTEN);
 
+// --------------------- ANALOG SNAPSHOT (I2C) --------------------------------
+// Mega2I2C serves analog via Wire.onRequest (ISR context). We must not perform
+// heavy sampling or floating-point work there.
+// Therefore we build an analog snapshot in loop() and serve it as-is.
+// Double-buffered to avoid tearing while the ISR is sending bytes.
+Mega2AnalogPayload g_analogSnapBuf[2] = {};
+volatile uint8_t g_analogSnapIdx = 0;
+static uint8_t s_analogSeq = 0;
+
+static inline void publishAnalogSnapshot(const Mega2AnalogPayload& p)
+{
+    const uint8_t next = (uint8_t)(g_analogSnapIdx ^ 1u);
+    g_analogSnapBuf[next] = p;
+    ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+        g_analogSnapIdx = next;
+    }
+}
+
 // --------------------- KONTAKTGLEISE ----------------------------------------
 SensorKontakt k_block1(PIN_KONTAKT_BLOCK1);
 SensorKontakt k_block2(PIN_KONTAKT_BLOCK2);
@@ -116,16 +136,16 @@ SensorKontakt k_bhf4a(PIN_KONTAKT_BHF4_A);
 SensorKontakt k_bhf4b(PIN_KONTAKT_BHF4_B);
 
 // --------------------- STROMSENSOREN ----------------------------------------
-SensorStrom strom1(PIN_ADC_BLOCK1, THR_BLOCK_OCC_COUNTS);
-SensorStrom strom2(PIN_ADC_BLOCK2, THR_BLOCK_OCC_COUNTS);
-SensorStrom strom3(PIN_ADC_BLOCK3, THR_BLOCK_OCC_COUNTS);
-SensorStrom strom4(PIN_ADC_BLOCK4, THR_BLOCK_OCC_COUNTS);
-SensorStrom strom5(PIN_ADC_BLOCK5, THR_BLOCK_OCC_COUNTS);
-SensorStrom strom6(PIN_ADC_BLOCK6, THR_BLOCK_OCC_COUNTS);
+SensorStrom strom1(PIN_ADC_BLOCK1, 0);
+SensorStrom strom2(PIN_ADC_BLOCK2, 0);
+SensorStrom strom3(PIN_ADC_BLOCK3, 0);
+SensorStrom strom4(PIN_ADC_BLOCK4, 0);
+SensorStrom strom5(PIN_ADC_BLOCK5, 0);
+SensorStrom strom6(PIN_ADC_BLOCK6, 0);
 
-SensorStrom stromSbhf1(PIN_ADC_SBH_GL1, THR_BLOCK_OCC_COUNTS);
-SensorStrom stromSbhf2(PIN_ADC_SBH_GL2, THR_BLOCK_OCC_COUNTS);
-SensorStrom stromSbhf3(PIN_ADC_SBH_GL3, THR_BLOCK_OCC_COUNTS);
+SensorStrom stromSbhf1(PIN_ADC_SBH_GL1, 0);
+SensorStrom stromSbhf2(PIN_ADC_SBH_GL2, 0);
+SensorStrom stromSbhf3(PIN_ADC_SBH_GL3, 0);
 
 // --------------------- BLOCK-OBJEKTE ----------------------------------------
 static void initBlocks()
@@ -571,11 +591,40 @@ void setup()
     strom4.begin(); strom5.begin(); strom6.begin();
     stromSbhf1.begin(); stromSbhf2.begin(); stromSbhf3.begin();
 
+    // --- Counts -> mA Skalierung (vorläufige Werte, später kalibrieren!)
+    const uint16_t KI_NUM = 1;   // TODO: nach Kalibrierung anpassen
+    const uint16_t KI_DEN = 1;   // TODO: nach Kalibrierung anpassen
+
+    strom1.setScaleCountsToMA(KI_NUM, KI_DEN);
+    strom2.setScaleCountsToMA(KI_NUM, KI_DEN);
+    strom3.setScaleCountsToMA(KI_NUM, KI_DEN);
+    strom4.setScaleCountsToMA(KI_NUM, KI_DEN);
+    strom5.setScaleCountsToMA(KI_NUM, KI_DEN);
+    strom6.setScaleCountsToMA(KI_NUM, KI_DEN);
+    stromSbhf1.setScaleCountsToMA(KI_NUM, KI_DEN);
+    stromSbhf2.setScaleCountsToMA(KI_NUM, KI_DEN);
+    stromSbhf3.setScaleCountsToMA(KI_NUM, KI_DEN);
+
+    // --- Schwelle jetzt in mA definieren
+    strom1.setThreshold_mA(THR_BLOCK_OCC_MA);
+    strom2.setThreshold_mA(THR_BLOCK_OCC_MA);
+    strom3.setThreshold_mA(THR_BLOCK_OCC_MA);
+    strom4.setThreshold_mA(THR_BLOCK_OCC_MA);
+    strom5.setThreshold_mA(THR_BLOCK_OCC_MA);
+    strom6.setThreshold_mA(THR_BLOCK_OCC_MA);
+    stromSbhf1.setThreshold_mA(THR_BLOCK_OCC_MA);
+    stromSbhf2.setThreshold_mA(THR_BLOCK_OCC_MA);
+    stromSbhf3.setThreshold_mA(THR_BLOCK_OCC_MA);
+
     initBlocks();
 
     g_power.begin();
     g_trafoOben.begin();
     g_trafoUnten.begin();
+    
+    // Trafo scaling (ADC-domain Vrms -> Trafo Vrms)
+    g_trafoOben.setScale((float)KV_TRAFO_OBEN_NUM / (float)KV_TRAFO_OBEN_DEN);
+    g_trafoUnten.setScale((float)KV_TRAFO_UNTEN_NUM / (float)KV_TRAFO_UNTEN_DEN);
     g_sbhf.begin();
 
     w12.begin(); w13.begin(); w14.begin(); w15.begin();
@@ -599,9 +648,101 @@ void setup()
 void loop()
 {
     const uint32_t now = millis();
+    const uint32_t nowUs = micros();
 
-    g_trafoOben.update(now);
-    g_trafoUnten.update(now);
+    // Loop timing diagnostics (max gap) – optional
+    static uint32_t s_lastLoopUs = 0;
+    uint32_t loopDtUs = 0;
+    if (s_lastLoopUs != 0) loopDtUs = (uint32_t)(nowUs - s_lastLoopUs);
+    s_lastLoopUs = nowUs;
+#if DEBUG_LOOP_PERFORMANCE
+    mega2DebugLoopTick(now, loopDtUs);
+#endif
+
+    // Update Trafo sensors early so the snapshot uses fresh values
+    g_trafoOben.update(now, nowUs);
+    g_trafoUnten.update(now, nowUs);
+
+    // Build analog snapshot at a low rate for the ESP/UI.
+    // NOTE: heavy RMS sampling is allowed only in CALIB_MODE.
+    static uint32_t s_lastAnalogSnapMs = 0;
+    if ((uint32_t)(now - s_lastAnalogSnapMs) >= 200u)
+    {
+        s_lastAnalogSnapMs = now;
+
+        Mega2AnalogPayload p{};
+        p.seq = ++s_analogSeq;
+
+        // flags bit4 (0x10): RAW debug mode
+        //   vA10/vB10 carry Vrms * 10 (sensor-domain, uncalibrated)
+        //   i_mA[]    carries RMS counts from current sensors (not mA)
+        p.flags = 0x10;
+
+#if MEGA2_CALIB_MODE
+        // Period-accurate RMS sampling (blocking) for calibration.
+        // This is intentionally slow but reproducible.
+        const uint16_t freqHz = 50;
+        const uint8_t periods = 2; // 2 periods @50Hz ≈ 40ms
+        const uint32_t periodUs = 1000000UL / (uint32_t)freqHz;
+        const uint32_t windowUs = periodUs * (uint32_t)periods;
+
+        auto scanMinMax = [&](uint8_t pin, uint16_t &mn, uint16_t &mx) {
+            mn = 1023;
+            mx = 0;
+            const uint32_t t0 = micros();
+            while ((uint32_t)(micros() - t0) < windowUs) {
+                const uint16_t r = (uint16_t)analogRead(pin);
+                if (r < mn) mn = r;
+                if (r > mx) mx = r;
+            }
+        };
+
+        uint16_t aMin, aMax, bMin, bMax;
+        scanMinMax(PIN_ADC_TRAFO_OBEN, aMin, aMax);
+        scanMinMax(PIN_ADC_TRAFO_UNTEN, bMin, bMax);
+
+        const float vA_adc = g_trafoOben.measureVrmsBlocking(freqHz, periods);
+        const float vB_adc = g_trafoUnten.measureVrmsBlocking(freqHz, periods);
+
+        // Scale to Trafo-domain for consistent payload/UI
+        const float vA = vA_adc * g_trafoOben.scale();
+        const float vB = vB_adc * g_trafoUnten.scale();
+
+        static uint32_t s_lastPrintMs = 0;
+        if ((uint32_t)(millis() - s_lastPrintMs) >= 1000u) {
+            s_lastPrintMs = millis();
+            Serial.print(F("[CALIB] TRAFO raw A9 min/max=")); Serial.print(aMin); Serial.print('/'); Serial.print(aMax);
+            Serial.print(F("  A10 min/max=")); Serial.print(bMin); Serial.print('/'); Serial.print(bMax);
+            Serial.print(F("  vA=")); Serial.print(vA, 2); Serial.print(F("V (adc=")); Serial.print(vA_adc, 3); Serial.print(F("V)"));
+            Serial.print(F("  vB=")); Serial.print(vB, 2); Serial.print(F("V (adc=")); Serial.print(vB_adc, 3); Serial.print(F("V)"));
+            Serial.println();
+        }
+        p.vA10 = (vA <= 0.0f) ? 0u : (uint16_t)lroundf(vA * 10.0f);
+        p.vB10 = (vB <= 0.0f) ? 0u : (uint16_t)lroundf(vB * 10.0f);
+
+        // Current sensors: measure blocking RMS counts per channel.
+        // Blocks are 1-based (g_blocks[0] = nullptr)
+        for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++)
+        {
+            Block* b = g_blocks[i + 1];
+            p.i_mA[i] = b ? b->stromRmsCountsBlocking(50, 1) : 0;
+        }
+#else
+        // Fast path (non-blocking). Uses SensorTrafoAC peak-to-peak approximation and SensorStrom EMA.
+        const float vA = g_trafoOben.rms();
+        const float vB = g_trafoUnten.rms();
+        p.vA10 = (vA <= 0.0f) ? 0u : (uint16_t)lroundf(vA * 10.0f);
+        p.vB10 = (vB <= 0.0f) ? 0u : (uint16_t)lroundf(vB * 10.0f);
+        for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++)
+        {
+            Block* b = g_blocks[i + 1];
+            p.i_mA[i] = b ? b->stromRmsCounts() : 0;
+        }
+#endif
+
+        publishAnalogSnapshot(p);
+    }
+
 
 #if MEGA2_DEBUG
     dbgHandleSerial();
@@ -638,7 +779,7 @@ void loop()
             g_bc.update(now);
         }
 
-    if (now - lastSbhfUpdate >= SBHF_UPDATE_MS)
+        if (now - lastSbhfUpdate >= SBHF_UPDATE_MS)
         {
             lastSbhfUpdate = now;
             g_sbhf.update(now);
