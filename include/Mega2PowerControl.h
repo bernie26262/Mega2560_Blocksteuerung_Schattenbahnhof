@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include <util/atomic.h>
 #include "mega2_pins.h"
 #include "PowerControl.h"
 
@@ -10,18 +11,24 @@ public:
         // Global Power-Cut Relais (Trafo oben/unten) – low-aktiv ("CUT")
         pinMode(PIN_RELAY_TRAFO_OBEN_CUT,  OUTPUT);
         pinMode(PIN_RELAY_TRAFO_UNTEN_CUT, OUTPUT);
+        // Boot-sicher: sofort "CUT aktiv" setzen (low-aktiv)
+        digitalWrite(PIN_RELAY_TRAFO_OBEN_CUT,  LOW);
+        digitalWrite(PIN_RELAY_TRAFO_UNTEN_CUT, LOW);
 
-        pinMode(PIN_RELAY_BLOCK5_NACH_SBH, OUTPUT);
-        pinMode(PIN_RELAY_SBH_GL1_NACH6,   OUTPUT);
-        pinMode(PIN_RELAY_SBH_GL2_NACH6,   OUTPUT);
-        pinMode(PIN_RELAY_SBH_GL3_NACH6,   OUTPUT);
-        pinMode(PIN_RELAY_NOTHALT,         OUTPUT);
-
-        digitalWrite(PIN_RELAY_BLOCK5_NACH_SBH, HIGH);
-        digitalWrite(PIN_RELAY_SBH_GL1_NACH6,   HIGH);
-        digitalWrite(PIN_RELAY_SBH_GL2_NACH6,   HIGH);
-        digitalWrite(PIN_RELAY_SBH_GL3_NACH6,   HIGH);
-        digitalWrite(PIN_RELAY_NOTHALT,         HIGH);
+        // Stromrelais (low-aktiv): IMMER als OUTPUT initialisieren.
+        // Wichtig: Ohne OUTPUT bleibt digitalWrite() nur Pull-Up-Steuerung (Input-mode)
+        // und kann bei Relaisboards zu "Geisterschalten"/Kopplungen führen.
+        initRelayPinLowActive(PIN_RELAY_BLOCK1_NACH2);
+        initRelayPinLowActive(PIN_RELAY_BLOCK2_NACH3);
+        initRelayPinLowActive(PIN_RELAY_BLOCK3_NACH4);
+        initRelayPinLowActive(PIN_RELAY_BLOCK4_NACH1);
+        initRelayPinLowActive(PIN_RELAY_BLOCK4_NACH5);
+        initRelayPinLowActive(PIN_RELAY_BLOCK5_NACH_SBH);
+        initRelayPinLowActive(PIN_RELAY_BLOCK6_NACH4);
+        initRelayPinLowActive(PIN_RELAY_SBH_GL1_NACH6);
+        initRelayPinLowActive(PIN_RELAY_SBH_GL2_NACH6);
+        initRelayPinLowActive(PIN_RELAY_SBH_GL3_NACH6);
+        initRelayPinLowActive(PIN_RELAY_NOTHALT);
 
         // Default: Boot-sicher → Power OFF (Cut aktiv)
         setMainPower(false);
@@ -80,6 +87,14 @@ public:
     bool isSsrTrafoB() const { return m_ssrTrafoBEnabled; }
     
 private:
+    static inline void initRelayPinLowActive(uint8_t pin) {
+        // atomic nicht zwingend nötig, aber verhindert RMW-Kollisionen falls später ISR/Parallelzugriffe dazu kommen
+        ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
+            pinMode(pin, OUTPUT);
+            digitalWrite(pin, HIGH); // default OFF (low-active)
+        }
+    }
+
     bool m_nothaltActive = false;
     bool m_mainPowerOn = false;
     bool m_ssrTrafoAEnabled = false;
