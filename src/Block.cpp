@@ -156,11 +156,6 @@ uint16_t Block::stromRmsCounts() const
     return m_strom ? m_strom->rmsCounts() : 0;
 }
 
-uint16_t Block::stromRmsCountsBlocking(uint16_t freqHz, uint8_t periods) const
-{
-    return m_strom ? m_strom->measureRmsCountsBlocking(freqHz, periods) : 0;
-}
-
 uint16_t Block::stromRms_mA() const
 {
     return m_strom ? m_strom->rms_mA() : 0;

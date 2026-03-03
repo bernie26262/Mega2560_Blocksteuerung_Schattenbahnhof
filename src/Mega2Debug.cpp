@@ -35,46 +35,47 @@ void mega2DebugAnalogTick(uint32_t nowMs)
     if (nowMs - s_lastAnalogTickMs < 1000u) return;
     s_lastAnalogTickMs = nowMs;
 
-    DBG_PRINT(F("[AN] I1 raw="));
-    DBG_PRINT(strom1.raw());
-    DBG_PRINT(F(" off="));
-    DBG_PRINT(strom1.offset());
-    DBG_PRINT(F(" rms="));
-    DBG_PRINT(strom1.rmsCounts());
-    DBG_PRINT(F(" act="));
-    DBG_PRINT(strom1.overThreshold());
+    // Keep this tick lightweight to minimize loop stalls:
+    // - no float printing (AVR float->string is expensive)
+    // - avoid sqrt in this tick (use absDev as cheap proxy)
+    // - split output across 4 seconds (phase 0..3)
 
-    DBG_PRINT(F(" | ISB1 raw="));
-    DBG_PRINT(stromSbhf1.raw());
-    DBG_PRINT(F(" off="));
-    DBG_PRINT(stromSbhf1.offset());
-    DBG_PRINT(F(" rms="));
-    DBG_PRINT(stromSbhf1.rmsCounts());
-    DBG_PRINT(F(" act="));
-    DBG_PRINT(stromSbhf1.overThreshold());
+    static uint8_t s_phase = 0;
+    s_phase = (uint8_t)((s_phase + 1u) & 0x03u);
 
-    DBG_PRINT(F(" | TOben="));
-    DBG_PRINT(g_trafoOben.rms());
-    DBG_PRINT(F("V adc="));
-    {
-        const uint16_t adc_mV = (uint16_t)lroundf(g_trafoOben.rmsAdc() * 1000.0f);
-        DBG_PRINT(adc_mV);
-        DBG_PRINT(F("mV"));
+    switch (s_phase) {
+        case 0:
+            // I1
+            DBG_PRINT(F("[AN] I1 raw=")); DBG_PRINT(strom1.raw());
+            DBG_PRINT(F(" off="));       DBG_PRINT(strom1.offset());
+            DBG_PRINT(F(" abs="));       DBG_PRINT(strom1.absDev());
+            DBG_PRINT(F(" act="));       DBG_PRINTLN(strom1.overThreshold());
+            break;
+
+        case 1:
+            // ISB1
+            DBG_PRINT(F("[AN] ISB1 raw=")); DBG_PRINT(stromSbhf1.raw());
+            DBG_PRINT(F(" off="));         DBG_PRINT(stromSbhf1.offset());
+            DBG_PRINT(F(" abs="));         DBG_PRINT(stromSbhf1.absDev());
+            DBG_PRINT(F(" act="));         DBG_PRINTLN(stromSbhf1.overThreshold());
+            break;
+
+        case 2:
+            // TOben (cached ints from SensorTrafoAC::update())
+            DBG_PRINT(F("[AN] TOben=")); DBG_PRINT(g_trafoOben.rmsTrafo_cV()); DBG_PRINT(F("cV"));
+            DBG_PRINT(F(" adc="));       DBG_PRINT(g_trafoOben.rmsAdc_mV());   DBG_PRINT(F("mV"));
+            DBG_PRINT(F(" pow="));       DBG_PRINTLN(g_trafoOben.isPowered());
+            break;
+
+        default:
+            // TUnten (cached ints from SensorTrafoAC::update())
+            DBG_PRINT(F("[AN] TUnten=")); DBG_PRINT(g_trafoUnten.rmsTrafo_cV()); DBG_PRINT(F("cV"));
+            DBG_PRINT(F(" adc="));        DBG_PRINT(g_trafoUnten.rmsAdc_mV());   DBG_PRINT(F("mV"));
+            DBG_PRINT(F(" pow="));        DBG_PRINTLN(g_trafoUnten.isPowered());
+            break;
     }
-    DBG_PRINT(F(" pow="));
-    DBG_PRINT(g_trafoOben.isPowered());
-
-    DBG_PRINT(F(" | TUnten="));
-    DBG_PRINT(g_trafoUnten.rms());
-    DBG_PRINT(F("V adc="));
-    {
-        const uint16_t adc_mV = (uint16_t)lroundf(g_trafoUnten.rmsAdc() * 1000.0f);
-        DBG_PRINT(adc_mV);
-        DBG_PRINT(F("mV"));
-    }
-    DBG_PRINT(F(" pow="));
-    DBG_PRINTLN(g_trafoUnten.isPowered());
 }
+
 #endif
 
 // ------------------------------------------------------------

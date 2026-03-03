@@ -25,6 +25,7 @@
 #include "SensorKontakt.h"
 #include "SensorStrom.h"
 #include "SensorTrafoAC.h"
+#include "AdcScheduler.h"
 #include "threshold_values.h"
 
 #include "PowerControl.h"
@@ -40,6 +41,14 @@
 #include "Mega2Status.h"
 #include "Mega2RunMode.h"
 #include <util/atomic.h>
+
+// Performance test helper:
+//  - MEGA2_PERF_NO_I2C=1 disables Mega2 I2C slave init/update to measure
+//    I2C impact on loop jitter (maxGapUs). Sampling is ISR-driven and remains.
+#ifndef MEGA2_PERF_NO_I2C
+#define MEGA2_PERF_NO_I2C 0
+#endif
+
 
 // ============================================================================
 // GLOBALE OBJEKTE
@@ -98,6 +107,15 @@ Mega2PowerControl g_power;
 // --------------------- TRAFO-SPANNUNG (ZMPT101B) ----------------------------
 SensorTrafoAC g_trafoOben(PIN_ADC_TRAFO_OBEN);
 SensorTrafoAC g_trafoUnten(PIN_ADC_TRAFO_UNTEN);
+
+// ADC scheduler sink: feed trafo sensors inside ADC ISR (jitter-proof).
+static void adcIsrSink(uint8_t channel, uint16_t value)
+{
+    const uint8_t chOben  = (uint8_t)(PIN_ADC_TRAFO_OBEN  - A0);
+    const uint8_t chUnten = (uint8_t)(PIN_ADC_TRAFO_UNTEN - A0);
+    if (channel == chOben)  { g_trafoOben.onSampleISR(value); return; }
+    if (channel == chUnten) { g_trafoUnten.onSampleISR(value); return; }
+}
 
 // --------------------- ANALOG SNAPSHOT (I2C) --------------------------------
 // Mega2I2C serves analog via Wire.onRequest (ISR context). We must not perform
@@ -571,7 +589,11 @@ void setup()
     buildMega2SystemStatus(g_systemStatus);
 
     // I2C Slave früh aktivieren, bevor lange Hardware-Inits laufen.
+  #if !MEGA2_PERF_NO_I2C
     megaI2C_begin();
+  #else
+    DBG_PRINTLN(F("[PERF] I2C disabled (MEGA2_PERF_NO_I2C=1)"));
+  #endif
 
 
     // Kontaktgleise
@@ -621,6 +643,37 @@ void setup()
     g_power.begin();
     g_trafoOben.begin();
     g_trafoUnten.begin();
+
+    // --------------------------------------------------------------------
+    // ADC Scheduler: deterministic sampling independent from loop() jitter.
+    // Total ~2800 samples/s (Timer1 ~2809Hz):
+    //   - Trafo oben/unten: 500Hz each (5 slots per 10ms)
+    //   - 9x Strom: 200Hz each (2 slots per 10ms)
+    // Schedule wheel length 28 => 10ms per wheel.
+    // --------------------------------------------------------------------
+    static const uint8_t s_adcSchedule[28] = {
+        // 10x Trafo (5 each)
+        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_UNTEN,
+        // 18x Strom (2 each)
+        PIN_ADC_BLOCK1, PIN_ADC_BLOCK2, PIN_ADC_BLOCK3,
+        PIN_ADC_BLOCK4, PIN_ADC_BLOCK5, PIN_ADC_BLOCK6,
+        PIN_ADC_SBH_GL1, PIN_ADC_SBH_GL2, PIN_ADC_SBH_GL3,
+        PIN_ADC_BLOCK1, PIN_ADC_BLOCK2, PIN_ADC_BLOCK3,
+        PIN_ADC_BLOCK4, PIN_ADC_BLOCK5, PIN_ADC_BLOCK6,
+        PIN_ADC_SBH_GL1, PIN_ADC_SBH_GL2, PIN_ADC_SBH_GL3,
+    };
+
+    adcSchedSetIsrSink(adcIsrSink);
+    adcSchedBegin(s_adcSchedule, (uint8_t)sizeof(s_adcSchedule));
+
+    // Trafo channels are processed in ISR (min/max window). Disable queueing
+    // to avoid pointless ring drops.
+    adcSchedSetQueueEnabled(PIN_ADC_TRAFO_OBEN, false);
+    adcSchedSetQueueEnabled(PIN_ADC_TRAFO_UNTEN, false);
     
     // Trafo scaling (ADC-domain Vrms -> Trafo Vrms)
     g_trafoOben.setScale((float)KV_TRAFO_OBEN_NUM / (float)KV_TRAFO_OBEN_DEN);
@@ -650,6 +703,34 @@ void loop()
     const uint32_t now = millis();
     const uint32_t nowUs = micros();
 
+    // Simple loop counter (debug): average loops per second over 5s
+    static uint32_t s_loopCount = 0;
+    static uint32_t s_loopCountStartMs = 0;
+    static uint32_t s_stromMissedTicks = 0;
+    static uint32_t s_lastStromUpdateMsSeen = 0;
+
+#if MEGA2_DEBUG
+    if (s_loopCountStartMs == 0) s_loopCountStartMs = now;
+    s_loopCount++;
+    const uint32_t lpsDt = (uint32_t)(now - s_loopCountStartMs);
+    if (lpsDt >= 5000u) {
+        const uint32_t lps = (s_loopCount * 1000UL) / (lpsDt ? lpsDt : 1u);
+        Serial.print(F("[LPS] loopsPerSec="));
+        Serial.print(lps);
+        Serial.print(F(" stromMissedTicks="));
+        Serial.print(s_stromMissedTicks);
+        Serial.print(F(" trafoMissedOben="));
+        Serial.print(g_trafoOben.missedSamples());
+        Serial.print(F(" trafoMissedUnten="));
+        Serial.println(g_trafoUnten.missedSamples());
+        s_stromMissedTicks = 0;
+        s_loopCount = 0;
+        s_loopCountStartMs = now;
+    }
+#endif // MEGA2_DEBUG
+
+
+
     // Loop timing diagnostics (max gap) – optional
     static uint32_t s_lastLoopUs = 0;
     uint32_t loopDtUs = 0;
@@ -659,12 +740,13 @@ void loop()
     mega2DebugLoopTick(now, loopDtUs);
 #endif
 
-    // Update Trafo sensors early so the snapshot uses fresh values
-    g_trafoOben.update(now, nowUs);
-    g_trafoUnten.update(now, nowUs);
+    // Update Trafo sensors early so the snapshot uses fresh values.
+    // Sampling itself is done in ISR (AdcScheduler).
+    g_trafoOben.update(now);
+    g_trafoUnten.update(now);
 
     // Build analog snapshot at a low rate for the ESP/UI.
-    // NOTE: heavy RMS sampling is allowed only in CALIB_MODE.
+    // NOTE: Analog snapshot is built from non-blocking sensors (no blocking sampling).
     static uint32_t s_lastAnalogSnapMs = 0;
     if ((uint32_t)(now - s_lastAnalogSnapMs) >= 200u)
     {
@@ -678,57 +760,7 @@ void loop()
         //   i_mA[]    carries RMS counts from current sensors (not mA)
         p.flags = 0x10;
 
-#if MEGA2_CALIB_MODE
-        // Period-accurate RMS sampling (blocking) for calibration.
-        // This is intentionally slow but reproducible.
-        const uint16_t freqHz = 50;
-        const uint8_t periods = 2; // 2 periods @50Hz ≈ 40ms
-        const uint32_t periodUs = 1000000UL / (uint32_t)freqHz;
-        const uint32_t windowUs = periodUs * (uint32_t)periods;
-
-        auto scanMinMax = [&](uint8_t pin, uint16_t &mn, uint16_t &mx) {
-            mn = 1023;
-            mx = 0;
-            const uint32_t t0 = micros();
-            while ((uint32_t)(micros() - t0) < windowUs) {
-                const uint16_t r = (uint16_t)analogRead(pin);
-                if (r < mn) mn = r;
-                if (r > mx) mx = r;
-            }
-        };
-
-        uint16_t aMin, aMax, bMin, bMax;
-        scanMinMax(PIN_ADC_TRAFO_OBEN, aMin, aMax);
-        scanMinMax(PIN_ADC_TRAFO_UNTEN, bMin, bMax);
-
-        const float vA_adc = g_trafoOben.measureVrmsBlocking(freqHz, periods);
-        const float vB_adc = g_trafoUnten.measureVrmsBlocking(freqHz, periods);
-
-        // Scale to Trafo-domain for consistent payload/UI
-        const float vA = vA_adc * g_trafoOben.scale();
-        const float vB = vB_adc * g_trafoUnten.scale();
-
-        static uint32_t s_lastPrintMs = 0;
-        if ((uint32_t)(millis() - s_lastPrintMs) >= 1000u) {
-            s_lastPrintMs = millis();
-            Serial.print(F("[CALIB] TRAFO raw A9 min/max=")); Serial.print(aMin); Serial.print('/'); Serial.print(aMax);
-            Serial.print(F("  A10 min/max=")); Serial.print(bMin); Serial.print('/'); Serial.print(bMax);
-            Serial.print(F("  vA=")); Serial.print(vA, 2); Serial.print(F("V (adc=")); Serial.print(vA_adc, 3); Serial.print(F("V)"));
-            Serial.print(F("  vB=")); Serial.print(vB, 2); Serial.print(F("V (adc=")); Serial.print(vB_adc, 3); Serial.print(F("V)"));
-            Serial.println();
-        }
-        p.vA10 = (vA <= 0.0f) ? 0u : (uint16_t)lroundf(vA * 10.0f);
-        p.vB10 = (vB <= 0.0f) ? 0u : (uint16_t)lroundf(vB * 10.0f);
-
-        // Current sensors: measure blocking RMS counts per channel.
-        // Blocks are 1-based (g_blocks[0] = nullptr)
-        for (uint8_t i = 0; i < M2_NUM_BLOCKS; i++)
-        {
-            Block* b = g_blocks[i + 1];
-            p.i_mA[i] = b ? b->stromRmsCountsBlocking(50, 1) : 0;
-        }
-#else
-        // Fast path (non-blocking). Uses SensorTrafoAC peak-to-peak approximation and SensorStrom EMA.
+// Fast path (non-blocking). Uses SensorTrafoAC peak-to-peak approximation and SensorStrom EMA.
         const float vA = g_trafoOben.rms();
         const float vB = g_trafoUnten.rms();
         p.vA10 = (vA <= 0.0f) ? 0u : (uint16_t)lroundf(vA * 10.0f);
@@ -738,7 +770,6 @@ void loop()
             Block* b = g_blocks[i + 1];
             p.i_mA[i] = b ? b->stromRmsCounts() : 0;
         }
-#endif
 
         publishAnalogSnapshot(p);
     }
@@ -747,7 +778,9 @@ void loop()
 #if MEGA2_DEBUG
     dbgHandleSerial();
   #if MEGA2_DEBUG_ANALOG_TICK
-    mega2DebugAnalogTick(now);
+    #ifndef MEGA2_PERF_NO_ANALOGTICK
+      mega2DebugAnalogTick(now);
+    #endif
   #endif
 #endif
 
@@ -759,6 +792,18 @@ void loop()
     // Stromsensoren (ADC) regelmäßig aktualisieren, damit Block::update() überThreshold() sinnvoll ist
     if (now - lastStromUpdate >= STROM_UPDATE_MS)
     {
+#if MEGA2_DEBUG
+        // count missed scheduler ticks (if loop was blocked)
+        if (s_lastStromUpdateMsSeen != 0) {
+            const uint32_t dt = (uint32_t)(now - s_lastStromUpdateMsSeen);
+            if (dt > (uint32_t)STROM_UPDATE_MS) {
+                const uint32_t steps = dt / (uint32_t)STROM_UPDATE_MS;
+                if (steps > 1u) s_stromMissedTicks += (steps - 1u);
+            }
+        }
+        s_lastStromUpdateMsSeen = now;
+#endif // MEGA2_DEBUG
+
         lastStromUpdate = now;
         strom1.update(); strom2.update(); strom3.update();
         strom4.update(); strom5.update(); strom6.update();
@@ -807,7 +852,9 @@ void loop()
         dbgMaybePrintSysFlags(g_systemStatus.flags);
     #endif
 
+      #if !MEGA2_PERF_NO_I2C
         megaI2C_update();
+      #endif
     }
     
 #if MEGA2_DEBUG

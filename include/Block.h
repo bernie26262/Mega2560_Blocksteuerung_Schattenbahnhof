@@ -28,7 +28,6 @@ public:
 
     // Für Diagnose/UI: echter Messwert (falls SensorStrom das liefert)
     uint16_t stromRmsCounts() const;
-    uint16_t stromRmsCountsBlocking(uint16_t freqHz = 50, uint8_t periods = 1) const;
     uint16_t stromRms_mA() const;
 
     // B4.1: zeitlich stabile Freigabe

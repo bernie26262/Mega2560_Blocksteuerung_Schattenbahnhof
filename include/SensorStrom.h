@@ -17,6 +17,7 @@ public:
 
     uint16_t raw() const;
     uint16_t offset() const;
+    uint16_t absDev() const { return m_absDev; }
     uint16_t absDevCounts() const;
     uint16_t rmsCounts() const;
     bool overThreshold() const;
@@ -28,10 +29,6 @@ public:
     void setScaleCountsToMA(uint16_t num, uint16_t den);
 
     uint16_t rms_mA() const;
-
-    // Blocking RMS measurement over full AC periods (for CALIB/diagnostics).
-    // Returns RMS in ADC counts (deviation around computed zeropoint).
-    uint16_t measureRmsCountsBlocking(uint16_t freqHz = 50, uint8_t periods = 2) const;
 
 private:
     uint8_t  m_pin;
