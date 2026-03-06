@@ -1,5 +1,8 @@
 #include <Wire.h>
 #include <Arduino.h>
+#if defined(ARDUINO_ARCH_AVR)
+#include <avr/io.h>
+#endif
 #include <string.h>
 
 #ifndef EE_DEBUG_DIAG_WRITE
@@ -454,6 +457,24 @@ void i2cOnReceive(int len)
     // --------------------------------------------------
     if (cmd == M2_CMD_SBH_SELFTEST_RETRY)
     {
+        // Pre-check: gleiche "harten" Ablehnungen wie im späteren Start (Loop-Kontext),
+        // damit die UI nicht "OK" bekommt, obwohl der Start danach abgelehnt wird.
+        // Retry ist nur sinnvoll, wenn tatsächlich ein Weichen-Defekt-Warning aktiv ist.
+        // Bits laut include/ShadowYardController.h (enum SbhfWarning : uint8_t):
+        // W12=0x02, W13=0x04, W14=0x08, W15=0x10
+        const uint8_t weicheWarn = (uint8_t)(0x02 | 0x04 | 0x08 | 0x10);
+
+        const bool hasWeicheWarn = ((shadowController.warningMask() & weicheWarn) != 0);
+        const SBhfState st = shadowController.state();
+        const bool stateOk = (st == SBhfState::Idle) || (st == SBhfState::Error);
+
+        if (!hasWeicheWarn || shadowController.isSelftestActive() || !stateOk)
+        {
+            s_cmdResponseOk      = 0;
+            s_cmdResponsePending = true;
+            return;
+        }
+
         // WICHTIG: NICHT hier startSelftest() aufrufen (I2C onReceive ist timingkritisch).
         // Wir quittieren sofort und starten den Selftest später im loop-Kontext.
         s_pendingSelftestRetry = true;
@@ -471,6 +492,20 @@ void i2cOnReceive(int len)
     // --------------------------------------------------
     if (cmd == M2_CMD_SBH_SELFTEST_STARTUP)
     {
+        // Pre-check: entspricht ShadowYardController::startSelftestStartup():
+        // - nie parallel
+        // - niemals bei aktivem HW-NOT-AUS (Emergency)
+        // - nur aus Idle oder Error
+        const SBhfState st = shadowController.state();
+        const bool stateOk = (st == SBhfState::Idle) || (st == SBhfState::Error);
+
+        if (shadowController.isSelftestActive() || safetyIsEmergencyActive() || !stateOk)
+        {
+            s_cmdResponseOk      = 0;
+            s_cmdResponsePending = true;
+            return;
+        }
+
         // NICHT im onReceive starten (timingkritisch) -> später im loop
         s_pendingSelftestStartup = true;
         pendingSet(M2_PEND_SHADOW | M2_PEND_ENTRY | M2_PEND_ENTRY_PREV | M2_PEND_SAFETY);
@@ -941,6 +976,16 @@ void megaI2C_update()
             uint8_t pin = 0;
             if (diagRelayBitToPin(s_diagPulseBit, pin))
             {
+                // Robustheit: Pin immer als OUTPUT erzwingen (sonst ggf. "halbe Pegel"/kein Schalten)
+                pinMode(pin, OUTPUT);
+                digitalWrite(pin, HIGH); // default OFF (active-low) vor Puls
+
+                // Extra Diagnose: W15 hängt auf D8/D9 => Port H. Bei Problemen: DDR/PORT prüfen.
+                if (pin == 8 || pin == 9) {
+#if defined(__AVR_ATmega2560__) || defined(ARDUINO_AVR_MEGA2560)
+                    EE_DIAGW("W15 diag pulse pre: pin=%u DDRH=0x%02X PORTH=0x%02X PINH=0x%02X", (unsigned)pin, (unsigned)DDRH, (unsigned)PORTH, (unsigned)PINH);
+#endif
+                }
                 s_diagPulsePin    = pin;
                 s_diagPulseEndMs  = nowMs + (uint32_t)s_diagPulseMs;
                 s_diagPulseActive = true;

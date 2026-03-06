@@ -805,6 +805,12 @@ void loop()
 #endif // MEGA2_DEBUG
 
         lastStromUpdate = now;
+        // Power mapping: Block 1-3 = Trafo oben, Block 4-6 + SBHF 1-3 = Trafo unten
+        const bool pOben  = g_trafoOben.isPowered();
+        const bool pUnten = g_trafoUnten.isPowered();
+        strom1.setPowered(pOben);  strom2.setPowered(pOben);  strom3.setPowered(pOben);
+        strom4.setPowered(pUnten); strom5.setPowered(pUnten); strom6.setPowered(pUnten);
+        stromSbhf1.setPowered(pUnten); stromSbhf2.setPowered(pUnten); stromSbhf3.setPowered(pUnten);
         strom1.update(); strom2.update(); strom3.update();
         strom4.update(); strom5.update(); strom6.update();
         stromSbhf1.update(); stromSbhf2.update(); stromSbhf3.update();

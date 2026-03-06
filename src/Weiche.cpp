@@ -13,17 +13,30 @@ Weiche::Weiche(uint8_t id,
 
 void Weiche::begin()
 {
-    pinMode(m_pinGerade, OUTPUT);
-    pinMode(m_pinAbbiegen, OUTPUT);
-
+    // Boot-glitch vermeiden: erst Output-Latch setzen, dann DDR
     digitalWrite(m_pinGerade, HIGH);
     digitalWrite(m_pinAbbiegen, HIGH);
+    pinMode(m_pinGerade, OUTPUT);
+    pinMode(m_pinAbbiegen, OUTPUT);
 }
 
-void Weiche::schalte(Stellung s)
+bool Weiche::schalte(Stellung s, bool force)
 {
     if (m_phase != IDLE)
-        return;
+    {
+        if (!force) return false;
+        // Force: laufenden Zustand abbrechen (für Selftest/Servicefälle)
+        digitalWrite(m_pinGerade, HIGH);
+        digitalWrite(m_pinAbbiegen, HIGH);
+        m_phase = IDLE;
+    }
+
+    // Robustheit: bei jedem Schaltvorgang OUTPUT erzwingen (gegen versehentliches Umkonfigurieren / Störungen).
+    pinMode(m_pinGerade, OUTPUT);
+    pinMode(m_pinAbbiegen, OUTPUT);
+    // Default OFF (low-aktiv): beide HIGH, dann den Ziel-Pin LOW pulsen.
+    digitalWrite(m_pinGerade, HIGH);
+    digitalWrite(m_pinAbbiegen, HIGH);
 
     m_stellung = s;
     m_phase = IMPULS_ACTIVE;
@@ -39,6 +52,7 @@ void Weiche::schalte(Stellung s)
         digitalWrite(m_pinAbbiegen, LOW);
         digitalWrite(m_pinGerade, HIGH);
     }
+    return true;
 }
 
 void Weiche::update(uint32_t now)

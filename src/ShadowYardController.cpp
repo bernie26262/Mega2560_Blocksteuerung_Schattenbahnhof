@@ -208,6 +208,17 @@ void ShadowYardController::onS16()
 
 void ShadowYardController::update(uint32_t nowMs)
 {
+    // ------------------------------------------------------------
+    // Weichen immer zyklisch updaten:
+    // - beendet aktive Impulse nach PULSE_MS
+    // - setzt danach COOLDOWN / später IDLE
+    // Ohne diese Updates taktet Weiche::schalte() die Ausgänge nicht sauber.
+    // ------------------------------------------------------------
+    w12.update(nowMs);
+    w13.update(nowMs);
+    w14.update(nowMs);
+    w15.update(nowMs);
+
     if (m_selftestActive)
     {
         selftestUpdate(nowMs);
@@ -800,14 +811,39 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
 
     auto startPulseForIdx = [&](uint8_t i)
     {
-        // NEW: always toggle against current RM before evaluation step
-        const bool rmAbNow = weichen[i]->rueckmeldungAbbiegen();   // true=Abbiegen
-        const bool targetAb = !rmAbNow;                            // toggle
-        const uint8_t expBit = targetAb ? 0 : 1;                   // 1=Gerade,0=Abbiegen
-
         auto &st = m_stT[i];
-        if (m_selftestPhase == ST_GERADE) st.expGeradeBit = expBit;
-        else                              st.expAbbiegenBit = expBit;
+        
+        bool targetAb = false;
+        uint8_t expBit = 0xFF;
+        bool rmAbNow = weichen[i]->rueckmeldungAbbiegen(); // nur für Logging / PH1-Entscheidung
+
+        if (m_selftestPhase == ST_GERADE)
+        {
+            // Phase 1:
+            // zuerst immer GEGEN die aktuell gemeldete Stellung schalten
+            // RM-Abbiegen: true=Abzweig, false=Gerade
+            targetAb = !rmAbNow;
+            // rmBit-Sicht im Selftest: 1=Gerade, 0=Abbiegen
+            expBit = targetAb ? 0 : 1;
+            st.expGeradeBit = expBit;
+        }
+        else
+        {
+            // Phase 2:
+            // NICHT erneut aus aktuellem RM ableiten,
+            // sondern die GEGENTEILIGE Richtung von Phase 1 testen.
+            //
+            // expGeradeBit: 1=Gerade, 0=Abbiegen
+            // Gegentest = invertiertes expGeradeBit
+            if (st.expGeradeBit == 0xFF) {
+                DBG_PRINTF("[SBHF] ST WARN W%u PH2 without PH1 expectation\n", (unsigned)(12 + i));
+                return;
+            }
+
+            expBit = (st.expGeradeBit == 1) ? 0 : 1; // opposite of phase 1
+            targetAb = (expBit == 0);                // 0=Abbiegen, 1=Gerade
+            st.expAbbiegenBit = expBit;
+        }
 
         DBG_PRINTF("[SBHF] ST pulse ON  W%u -> %s (rmAbNow=%u expBit=%u)\n",
                    (unsigned)(12 + i),
@@ -815,8 +851,12 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
                    (unsigned)rmAbNow,
                    (unsigned)expBit);
 
-        if (targetAb) weichen[i]->setAbzweig();
-        else          weichen[i]->setGerade();
+        // Selftest muss sicher pulsen dürfen, auch wenn die Weiche gerade noch in COOLDOWN hängt.
+        const bool started = weichen[i]->schalte(targetAb ? Weiche::ABBIEGEN : Weiche::GERADE, true);
+        if (!started) {
+            DBG_PRINTF("[SBHF] ST WARN W%u pulse rejected (busy)\n", (unsigned)(12 + i));
+            return;
+        }
 
         m_stPulseActive  = true;
         m_stPulseStartMs = nowMs;
@@ -825,25 +865,25 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
 
     auto finishPulseForIdx = [&](uint8_t i)
     {
-        // Hinweis: Es gibt hier bewusst kein "Coil OFF", weil dein Weiche-Objekt
-        // offenbar intern den Impuls taktet (wie in processWeichenSequence()).
-        // Falls es eine echte OFF-Funktion gibt, kann man sie hier ergänzen.
-
         auto &st = m_stT[i];
 
         if (m_selftestPhase == ST_GERADE)
         {
             st.issuedGerade = true;
             st.dueGeradeMs  = nowMs + SELFTEST_SETTLE_MS; // settle ab Puls-ENDE
-            DBG_PRINTF("[SBHF] ST pulse OFF W%u GERADE -> due +%lums\n",
-                       (unsigned)(12 + i), (unsigned long)SELFTEST_SETTLE_MS);
+            DBG_PRINTF("[SBHF] ST pulse OFF W%u %s -> due +%lums\n",
+                       (unsigned)(12 + i),
+                       (st.expGeradeBit == 0) ? "ABBIEGEN" : "GERADE",
+                       (unsigned long)SELFTEST_SETTLE_MS);
         }
         else
         {
             st.issuedAbbiegen = true;
             st.dueAbbiegenMs  = nowMs + SELFTEST_SETTLE_MS; // settle ab Puls-ENDE
-            DBG_PRINTF("[SBHF] ST pulse OFF W%u ABBIEGEN -> due +%lums\n",
-                       (unsigned)(12 + i), (unsigned long)SELFTEST_SETTLE_MS);
+            DBG_PRINTF("[SBHF] ST pulse OFF W%u %s -> due +%lums\n",
+                       (unsigned)(12 + i),
+                       (st.expAbbiegenBit == 0) ? "ABBIEGEN" : "GERADE",
+                       (unsigned long)SELFTEST_SETTLE_MS);
         }
 
         m_stPulseActive = false;
