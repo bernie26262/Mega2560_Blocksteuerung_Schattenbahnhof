@@ -1,4 +1,5 @@
 #include "ShadowYardController.h"
+#include "mega2_debug.h"
 
 #include "BlockController.h"
 #include "Weiche.h"
@@ -811,8 +812,17 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
 
     auto startPulseForIdx = [&](uint8_t i)
     {
+        DBG_SBHF_ST("[SST] startPulse idx=%u W%u phase=%u nextIdx=%u pulseActive=%u pulseIdx=%u now=%lu\n",
+                    (unsigned)i,
+                    (unsigned)(12 + i),
+                    (unsigned)m_selftestPhase,
+                    (unsigned)m_selftestNextIdx,
+                    (unsigned)m_stPulseActive,
+                    (unsigned)m_stPulseIdx,
+                    (unsigned long)nowMs);
+
         auto &st = m_stT[i];
-        
+
         bool targetAb = false;
         uint8_t expBit = 0xFF;
         bool rmAbNow = weichen[i]->rueckmeldungAbbiegen(); // nur für Logging / PH1-Entscheidung
@@ -851,13 +861,33 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
                    (unsigned)rmAbNow,
                    (unsigned)expBit);
 
+                   DBG_SBHF_ST("[SST] before schalte W%u target=%s rmAbNow=%u expBit=%u now=%lu\n",
+                    (unsigned)(12 + i),
+                    targetAb ? "ABBIEGEN" : "GERADE",
+                    (unsigned)rmAbNow,
+                    (unsigned)expBit,
+                    (unsigned long)nowMs);
+
+
         // Selftest muss sicher pulsen dürfen, auch wenn die Weiche gerade noch in COOLDOWN hängt.
         const bool started = weichen[i]->schalte(targetAb ? Weiche::ABBIEGEN : Weiche::GERADE, true);
+
+        DBG_SBHF_ST("[SST] after schalte W%u started=%u now=%lu\n",
+                    (unsigned)(12 + i),
+                    (unsigned)started,
+                    (unsigned long)nowMs);
+
         if (!started) {
             DBG_PRINTF("[SBHF] ST WARN W%u pulse rejected (busy)\n", (unsigned)(12 + i));
+            DBG_SBHF_ST("[SST] reject W%u pulse not started now=%lu\n",
+                        (unsigned)(12 + i),
+                        (unsigned long)nowMs);
             return;
         }
 
+        DBG_SBHF_ST("[SST] mark-active W%u now=%lu\n",
+                    (unsigned)(12 + i),
+                    (unsigned long)nowMs);
         m_stPulseActive  = true;
         m_stPulseStartMs = nowMs;
         m_stPulseIdx     = i;
@@ -866,6 +896,15 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
     auto finishPulseForIdx = [&](uint8_t i)
     {
         auto &st = m_stT[i];
+        DBG_SBHF_ST("[SST] finishPulse idx=%u W%u phase=%u pulseActive=%u start=%lu now=%lu dt=%lu\n",
+                    (unsigned)i,
+                    (unsigned)(12 + i),
+                    (unsigned)m_selftestPhase,
+                    (unsigned)m_stPulseActive,
+                    (unsigned long)m_stPulseStartMs,
+                    (unsigned long)nowMs,
+                    (unsigned long)(nowMs - m_stPulseStartMs));
+
 
         if (m_selftestPhase == ST_GERADE)
         {
@@ -892,6 +931,13 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
     // Wenn gerade ein Puls läuft: ggf. beenden
     if (m_stPulseActive)
     {
+        DBG_SBHF_ST("[SST] pulse-running W%u now=%lu start=%lu dt=%lu need=%lu\n",
+                    (unsigned)(12 + m_stPulseIdx),
+                    (unsigned long)nowMs,
+                    (unsigned long)m_stPulseStartMs,
+                    (unsigned long)(nowMs - m_stPulseStartMs),
+                    (unsigned long)SELFTEST_PULSE_MS);
+
         if (nowMs - m_stPulseStartMs >= SELFTEST_PULSE_MS)
         {
             finishPulseForIdx(m_stPulseIdx);
@@ -899,6 +945,10 @@ void ShadowYardController::selftestUpdate(uint32_t nowMs)
         }
         else
         {
+            DBG_SBHF_ST("[SST] pulse-hold W%u dt=%lu\n",
+                        (unsigned)(12 + m_stPulseIdx),
+                        (unsigned long)(nowMs - m_stPulseStartMs));
+
             // Puls läuft noch -> in diesem Tick keinen neuen Puls starten
             return;
         }

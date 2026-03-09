@@ -17,16 +17,20 @@ void SensorTrafoAC::begin()
     m_sampleCount = 0;
 
     m_winSamples = 0;
-    m_biasInit = false;
-    m_biasQ8 = 0;
-    m_winEnergy = 0;
+    m_winSum = 0;
+    m_winSumSq = 0;
     m_winMin = 1023;
     m_winMax = 0;
 
     m_qCount = 0;
     m_qW = 0;
     m_qR = 0;
-    for (uint8_t i = 0; i < WIN_Q; i++) { m_qEnergy[i] = 0; }
+    for (uint8_t i = 0; i < WIN_Q; i++) {
+        m_qSum[i] = 0;
+        m_qSumSq[i] = 0;
+        m_qMin[i] = 0;
+        m_qMax[i] = 0;
+    }
 
     m_rmsFilteredAdc = 0.0f;
     m_rmsFilteredTrafo = 0.0f;
@@ -63,18 +67,12 @@ void SensorTrafoAC::onSampleISR(uint16_t raw)
     if (r < m_winMin) m_winMin = r;
     if (r > m_winMax) m_winMax = r;
 
-    // BLR-like running bias (Q8 fixed point)
-    if (!m_biasInit) {
-        m_biasQ8 = ((int32_t)raw) << 8;
-        m_biasInit = true;
-    } else {
-        const int32_t rawQ8 = ((int32_t)raw) << 8;
-        m_biasQ8 += (rawQ8 - m_biasQ8) >> BIAS_SHIFT;
-    }
-
-    const int16_t centered = (int16_t)((int32_t)raw - (m_biasQ8 >> 8));
-    const int32_t c = (int32_t)centered;
-    m_winEnergy += (uint32_t)(c * c);
+    // True RMS window accumulation:
+    // mean  = E[x]
+    // ex2   = E[x^2]
+    // var   = ex2 - mean^2
+    m_winSum   += (uint32_t)raw;
+    m_winSumSq += (uint64_t)raw * (uint64_t)raw;
 
     uint16_t n = m_winSamples + 1u;
     m_winSamples = n;
@@ -88,9 +86,10 @@ void SensorTrafoAC::onSampleISR(uint16_t raw)
     {
         // Push completed window into bounded queue.
         uint8_t w = m_qW;
-        m_qEnergy[w] = m_winEnergy;
-        m_qMin[w]    = (uint16_t)m_winMin;
-        m_qMax[w]    = (uint16_t)m_winMax;
+        m_qSum[w]   = m_winSum;
+        m_qSumSq[w] = m_winSumSq;
+        m_qMin[w]   = (uint16_t)m_winMin;
+        m_qMax[w]   = (uint16_t)m_winMax;
 
         w = (uint8_t)((w + 1u) % WIN_Q);
         m_qW = w;
@@ -105,7 +104,8 @@ void SensorTrafoAC::onSampleISR(uint16_t raw)
 
         // Reset ISR window
         m_winSamples = 0;
-        m_winEnergy = 0;
+        m_winSum = 0;
+        m_winSumSq = 0;
         m_winMin = 1023;
         m_winMax = 0;
     }
@@ -119,24 +119,30 @@ void SensorTrafoAC::update(uint32_t nowMs)
     while (m_qCount)
     {
         // Atomically claim one window from the queue.
-        uint32_t energy = 0;
+        uint32_t sum = 0;
+        uint64_t sumSq = 0;
         uint16_t qmin = 1023;
         uint16_t qmax = 0;
         noInterrupts();
         if (m_qCount) {
             const uint8_t r = m_qR;
-            energy = m_qEnergy[r];
-            qmin   = m_qMin[r];
-            qmax   = m_qMax[r];
+            sum   = m_qSum[r];
+            sumSq = m_qSumSq[r];
+            qmin  = m_qMin[r];
+            qmax  = m_qMax[r];
             m_qR = (uint8_t)((r + 1u) % WIN_Q);
             m_qCount--;
         }
         interrupts();
 
-        // BLR-like true RMS in ADC domain from centered energy
+        // True RMS in ADC domain via variance:
+        // var = E[x^2] - E[x]^2
         const float n = (float)WINDOW_SAMPLES;
-        const float ms = (float)energy / n;
-        const float rmsCounts = sqrtf(ms);
+        const float mean = (float)sum / n;
+        const float ex2  = (float)sumSq / n;
+        float var = ex2 - (mean * mean);
+        if (var < 0.0f) var = 0.0f;
+        const float rmsCounts = sqrtf(var);
         float vrmsAdc = (rmsCounts * 5.0f) / 1023.0f;
 
         // If the ADC waveform clipped within this window, ignore it.
@@ -150,10 +156,13 @@ void SensorTrafoAC::update(uint32_t nowMs)
 
         const float vrmsTrafo = vrmsAdc * m_scale;
 
-        // Median + EMA (display calm)
+        // Median + asymmetrische Glättung:
+        // - im Normalbetrieb wieder ruhiger/stabiler
+        // - bei deutlich fallender Spannung weiterhin schneller nach unten
+        // - nahe 0V weiterhin sehr schneller Rücklauf
         m_lastRms[m_lastRmsIdx] = vrmsTrafo;
-        if (m_lastRmsCount < MEDIAN_N) m_lastRmsCount++;
-        m_lastRmsIdx = (uint8_t)((m_lastRmsIdx + 1u) % MEDIAN_N);
+        if (m_lastRmsCount < 5u) m_lastRmsCount++;
+        m_lastRmsIdx = (uint8_t)((m_lastRmsIdx + 1u) % 5u);
 
         float tmp[5] = {0};
         for (uint8_t i = 0; i < m_lastRmsCount; i++) tmp[i] = m_lastRms[i];
@@ -161,8 +170,81 @@ void SensorTrafoAC::update(uint32_t nowMs)
 
         const float oldTrafo = m_rmsFilteredTrafo;
         const float oldAdc   = m_rmsFilteredAdc;
-        m_rmsFilteredTrafo = (oldTrafo * 0.96f) + (med * 0.04f);
-        m_rmsFilteredAdc   = (oldAdc   * 0.96f) + (vrmsAdc * 0.04f);
+        
+        // ADC-domain median approximated from trafo median to keep both domains aligned.
+        const float medAdc = (m_scale > 0.0001f) ? (med / m_scale) : vrmsAdc;
+
+        // Asymmetric filter coefficients
+        // up / flat: calmer in steady operation
+        const float ALPHA_UP       = 0.05f; // 5% new
+        // clear falling edge: faster response
+        const float ALPHA_DOWN     = 0.28f; // 28% new
+        // near zero / trafo off: very fast decay
+        const float ALPHA_NEARZERO = 0.55f; // 55% new
+
+        // Thresholds
+        const float DROP_RATIO     = 0.85f; // "significantly lower than before"
+        const float NEARZERO_TRAFO = 1.20f; // below ~1.2V treat as near-zero
+        const float NEARZERO_ADC   = (m_scale > 0.0001f) ? (NEARZERO_TRAFO / m_scale) : 0.05f;
+        const float HOLD_BAND_TRAFO = 0.8f; // ignore small jitter around current value
+        const float HOLD_BAND_ADC   = (m_scale > 0.0001f) ? (HOLD_BAND_TRAFO / m_scale) : 0.02f;
+
+        float alphaTrafo = ALPHA_UP;
+        float alphaAdc   = ALPHA_UP;
+
+        if (med <= NEARZERO_TRAFO) {
+            alphaTrafo = ALPHA_NEARZERO;
+        } else if ((oldTrafo > 0.01f) && (med < oldTrafo * DROP_RATIO)) {
+            alphaTrafo = ALPHA_DOWN;
+        }
+
+        if (medAdc <= NEARZERO_ADC) {
+            alphaAdc = ALPHA_NEARZERO;
+        } else if ((oldAdc > 0.001f) && (medAdc < oldAdc * DROP_RATIO)) {
+            alphaAdc = ALPHA_DOWN;
+        }
+
+        float targetTrafo = med;
+        float targetAdc   = medAdc;
+
+        // Hold-band against jitter in normal operation:
+        // keep the displayed value if the new median only differs slightly.
+        // Do NOT hold near zero and do NOT hold on clear falling edges.
+        const bool trafoNearZero = (med <= NEARZERO_TRAFO);
+        const bool adcNearZero   = (medAdc <= NEARZERO_ADC);
+        const bool trafoFastDown = ((oldTrafo > 0.01f) && (med < oldTrafo * DROP_RATIO));
+        const bool adcFastDown   = ((oldAdc > 0.001f) && (medAdc < oldAdc * DROP_RATIO));
+
+        if (!trafoNearZero && !trafoFastDown && fabsf(med - oldTrafo) < HOLD_BAND_TRAFO) {
+            targetTrafo = oldTrafo;
+        }
+        if (!adcNearZero && !adcFastDown && fabsf(medAdc - oldAdc) < HOLD_BAND_ADC) {
+            targetAdc = oldAdc;
+        }
+
+        float nextTrafo = (oldTrafo * (1.0f - alphaTrafo)) + (targetTrafo * alphaTrafo);
+        float nextAdc   = (oldAdc   * (1.0f - alphaAdc))   + (targetAdc   * alphaAdc);
+
+        // Slew limiter for NORMAL operation only:
+        // limit visible step size per completed RMS window.
+        // Keep fast-down / near-zero behaviour untouched.
+        const float MAX_STEP_TRAFO = 0.35f; // V per window (~0.5 s)
+        const float MAX_STEP_ADC   = (m_scale > 0.0001f) ? (MAX_STEP_TRAFO / m_scale) : 0.01f;
+
+        if (!trafoNearZero && !trafoFastDown) {
+           const float d = nextTrafo - oldTrafo;
+            if (d >  MAX_STEP_TRAFO) nextTrafo = oldTrafo + MAX_STEP_TRAFO;
+            if (d < -MAX_STEP_TRAFO) nextTrafo = oldTrafo - MAX_STEP_TRAFO;
+        }
+        if (!adcNearZero && !adcFastDown) {
+            const float d = nextAdc - oldAdc;
+            if (d >  MAX_STEP_ADC) nextAdc = oldAdc + MAX_STEP_ADC;
+            if (d < -MAX_STEP_ADC) nextAdc = oldAdc - MAX_STEP_ADC;
+        }
+
+        m_rmsFilteredTrafo = nextTrafo;
+        m_rmsFilteredAdc   = nextAdc;
+
         // Cache integer representations for cheap debug printing
         m_rmsFilteredTrafo_cV = (uint16_t)lroundf(m_rmsFilteredTrafo * 100.0f);
         m_rmsFilteredAdc_mV   = (uint16_t)lroundf(m_rmsFilteredAdc   * 1000.0f);

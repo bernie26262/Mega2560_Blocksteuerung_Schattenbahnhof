@@ -2,7 +2,7 @@
 #include <Arduino.h>
 
 /*
-   SensorTrafoAC – AC-Spannungsmessung (Märklin Trafo) via ADC + Bias
+   SensorTrafoAC – AC-Spannungsmessung (Märklin Trafo) via ADC
 
    Ziel:
    - echte RMS-Messung aus ADC-Samples (robust gegen Spikes/Dropouts)
@@ -68,17 +68,18 @@ private:
     // Window accumulators (ISR updates)
     volatile uint16_t m_winSamples = 0;
 
-    // BLR-like bias tracking + AC energy accumulation over the current window
-    volatile bool     m_biasInit   = false;
-    volatile int32_t  m_biasQ8     = 0;   // running bias in Q8 fixed point
-    volatile uint32_t m_winEnergy  = 0;   // sum((x-bias)^2)
+    // Window accumulators for true RMS via
+    // var = E[x^2] - E[x]^2
+    volatile uint32_t m_winSum   = 0;   // sum(x)
+    volatile uint64_t m_winSumSq = 0;   // sum(x^2)
 
     // Completed-window queue (bounded, avoids losing windows when loop is busy)
     static constexpr uint8_t WIN_Q = 3;
     volatile uint8_t  m_qCount = 0;
     volatile uint8_t  m_qW = 0;
     volatile uint8_t  m_qR = 0;
-    volatile uint32_t m_qEnergy[WIN_Q] = {0};
+    volatile uint32_t m_qSum[WIN_Q]    = {0};
+    volatile uint64_t m_qSumSq[WIN_Q]  = {0};
     volatile uint16_t m_qMin[WIN_Q]    = {0};
     volatile uint16_t m_qMax[WIN_Q]    = {0};
 
@@ -106,5 +107,4 @@ private:
     static constexpr uint16_t WINDOW_MS = 500;     // 25 Perioden @50Hz (ruhiger, robust gegen Motor/Relais)     // 10 Perioden @50Hz
     static constexpr uint16_t SAMPLE_HZ = 500;     // per channel (via schedule)
     static constexpr uint16_t WINDOW_SAMPLES = (uint16_t)((SAMPLE_HZ * WINDOW_MS) / 1000u);
-    static constexpr uint8_t  BIAS_SHIFT = 6;      // 1/64 bias tracking
 };
