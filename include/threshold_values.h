@@ -29,9 +29,23 @@
 // ------------------------------------------------------------
 // Block occupancy via current sensor (mA)
 // ------------------------------------------------------------
-// Ab wann gilt ein Block als "Strom an / besetzt" über Strommessung?
-// Empfehlung: 3–5× Noise-Floor (Peak) im Leerlauf.
-static constexpr uint16_t THR_BLOCK_OCC_MA = 250;  // Startwert, nach Noise-Floor anpassen
+// Robuste Belegt-Erkennung:
+// - SET:   ab diesem Strom gilt der Block als belegt
+// - CLEAR: unter diesem Strom darf der Block wieder frei werden
+// - Dazwischen bleibt der bisherige Zustand erhalten
+//
+// Die Werte sind derzeit "counts-basiert als mA" (KI=1:1), also passend
+// zu den aktuellen Logs. Nach späterer echter Kalibrierung können sie
+// weiter als "mA" interpretiert werden.
+static constexpr uint16_t THR_BLOCK_OCC_SET_MA   = 40;
+static constexpr uint16_t THR_BLOCK_OCC_CLEAR_MA = 15;
+
+// Wie viele abgeschlossene RMS-Fenster müssen stabil anliegen?
+static constexpr uint8_t THR_BLOCK_OCC_SET_WINDOWS   = 2;
+static constexpr uint8_t THR_BLOCK_OCC_CLEAR_WINDOWS = 2;
+
+// Kompatibilitätswert für bestehende SensorStrom-Konfiguration in main.cpp
+static constexpr uint16_t THR_BLOCK_OCC_MA = THR_BLOCK_OCC_SET_MA;
 
 // ------------------------------------------------------------
 // Safety thresholds (mA)  (nach Kalibrierung!)
@@ -72,9 +86,9 @@ static constexpr uint16_t KI_COUNTS_TO_MA_DEN = 1;
 //            18.81Vrms / 0.825Vrms ≈ 22.80
 //            27.67Vrms / 1.211Vrms ≈ 22.85
 // Use a rational factor NUM/DEN to keep it stable across builds.
-static constexpr uint16_t KV_TRAFO_OBEN_NUM  = 2276;  // 22.76
+static constexpr uint16_t KV_TRAFO_OBEN_NUM  = 4610;  // 46.10 (recalibrated)
 static constexpr uint16_t KV_TRAFO_OBEN_DEN  = 100;
-static constexpr uint16_t KV_TRAFO_UNTEN_NUM = 2282;  // 22.82
+static constexpr uint16_t KV_TRAFO_UNTEN_NUM = 4655;  // 46.55
 static constexpr uint16_t KV_TRAFO_UNTEN_DEN = 100;
 
 // ------------------------------------------------------------

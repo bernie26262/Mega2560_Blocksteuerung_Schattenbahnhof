@@ -34,6 +34,9 @@ public:
     void setScaleCountsToMA(uint16_t num, uint16_t den);
 
     uint16_t rms_mA() const;
+    uint16_t lastWinMin() const { return m_lastWinMin; }
+    uint16_t lastWinMax() const { return m_lastWinMax; }
+    uint16_t lastWinSamples() const { return m_lastWinSamples; }
 
 private:
     uint8_t  m_pin;
@@ -67,6 +70,13 @@ private:
     uint16_t m_winCount = 0;
     uint32_t m_winSum = 0;        // sum(samples)
     uint64_t m_winSumSq = 0;      // sum(samples^2)
+    uint16_t m_winMin = 1023;
+    uint16_t m_winMax = 0;
+
+    // Debug snapshot of the last completed window
+    uint16_t m_lastWinMin = 0;
+    uint16_t m_lastWinMax = 0;
+    uint16_t m_lastWinSamples = 0;
 
     // Learned noise floor (counts). Updated only in idle.
     uint16_t m_noiseFloor = 0;

@@ -6,7 +6,7 @@
 
    Ziel:
    - echte RMS-Messung aus ADC-Samples (robust gegen Spikes/Dropouts)
-   - Windowing (WINDOW_MS) + Median(5) + EMA für ruhige Anzeige
+   - Windowing über vollständige AC-Perioden + Median + EMA für ruhige Anzeige
    - kein Blocking in loop()
    - Ergebnis ist "ADC-domain Vrms" (Volt am ADC-Pin) und "Trafo Vrms" via scale()
 
@@ -51,6 +51,14 @@ public:
 
 
     void printDebug(const char* label) const;
+    void setDebugLabel(const char* s) { m_debugLabel = s; }
+    const char* debugLabel() const { return m_debugLabel; }
+
+    // Compile-time diagnostics for boot banner / sanity checks
+    static constexpr uint16_t windowMs()      { return WINDOW_MS_NOMINAL; }
+    static constexpr uint16_t sampleHz()      { return SAMPLE_HZ; }
+    static constexpr uint16_t windowSamples() { return WINDOW_SAMPLES_NOMINAL; }
+    static constexpr uint8_t  winQ()          { return WIN_Q; }
 
     // Diagnostics (last ISR window min/max, sample count)
     int16_t minSample() const { return m_minSample; }
@@ -59,6 +67,7 @@ public:
 
 private:
     uint8_t m_pin;
+    const char* m_debugLabel = "?";
 
     // Diagnostics mirror (updated in ISR)
     volatile int16_t  m_minSample   = 1023;
@@ -74,7 +83,7 @@ private:
     volatile uint64_t m_winSumSq = 0;   // sum(x^2)
 
     // Completed-window queue (bounded, avoids losing windows when loop is busy)
-    static constexpr uint8_t WIN_Q = 3;
+    static constexpr uint8_t WIN_Q = 5;
     volatile uint8_t  m_qCount = 0;
     volatile uint8_t  m_qW = 0;
     volatile uint8_t  m_qR = 0;
@@ -82,11 +91,14 @@ private:
     volatile uint64_t m_qSumSq[WIN_Q]  = {0};
     volatile uint16_t m_qMin[WIN_Q]    = {0};
     volatile uint16_t m_qMax[WIN_Q]    = {0};
+    volatile uint16_t m_qN[WIN_Q]      = {0};
 
     // Mirror for diagnostics (loop reads these)
     volatile int16_t  m_winMin = 1023;
     volatile int16_t  m_winMax = 0;
     volatile uint32_t m_missedSamples = 0;
+    volatile uint16_t m_lastWindowSamples = 0;
+    uint32_t m_lastGoodWindowMs = 0;
     float m_scale = 1.0f;
     float m_powerThreshold = 2.0f;
 
@@ -99,12 +111,43 @@ private:
 
 
     // Outlier handling
-    static constexpr uint8_t  MEDIAN_N = 5;
+    static constexpr uint8_t  MEDIAN_N = 3;
     float m_lastRms[MEDIAN_N] = {0};
     uint8_t m_lastRmsCount = 0;
     uint8_t m_lastRmsIdx   = 0;
 
-    static constexpr uint16_t WINDOW_MS = 500;     // 25 Perioden @50Hz (ruhiger, robust gegen Motor/Relais)     // 10 Perioden @50Hz
-    static constexpr uint16_t SAMPLE_HZ = 500;     // per channel (via schedule)
-    static constexpr uint16_t WINDOW_SAMPLES = (uint16_t)((SAMPLE_HZ * WINDOW_MS) / 1000u);
+    // RMS-Fenster über vollständige AC-Perioden.
+    // 50 Hz -> 1 Periode = 20 ms, 10 Perioden ~ 200 ms nominal.
+    static constexpr uint8_t  WINDOW_PERIODS = 10;
+    static constexpr uint16_t WINDOW_MS_NOMINAL = (uint16_t)(WINDOW_PERIODS * 20u);
+    // Diagnose-/Nominalwert fuer Boot-Banner und Fenster-Nennwert.
+    // Die tatsaechlich gueltige Nutzsample-Rate pro Kanal haengt vom
+    // aktuellen ADC-Schedule und den verworfenen Burst-Anfangssamples ab.
+    static constexpr uint16_t SAMPLE_HZ = 1000;
+    static constexpr uint16_t WINDOW_SAMPLES_NOMINAL =
+        (uint16_t)(((uint32_t)SAMPLE_HZ * (uint32_t)WINDOW_MS_NOMINAL) / 1000u);
+
+    // Zero-crossing / phase-synchronous windowing state (ISR-owned)
+    // Adaptive bias tracker in Q8 fixed-point (ADC counts << 8)
+    volatile int32_t m_biasQ8 = ((int32_t)512 << 8);
+    volatile bool    m_prevBelow = false;
+    volatile bool    m_prevValid = false;
+    volatile bool    m_windowArmed = false;
+    volatile uint8_t m_periodCount = 0;
+
+    // Adaptive post-filter tuning
+    // Goal:
+    // - noticeably calmer display in stable regions
+    // - still fast on real knob movement
+    // - no regression near 0V
+    static constexpr float ADAPT_SNAP_ZERO_TRAFO = 0.35f;
+    static constexpr float ADAPT_SNAP_ZERO_ADC   = 0.02f;
+    static constexpr float ADAPT_SMALL_DELTA_TRAFO = 0.18f;
+    static constexpr float ADAPT_SMALL_DELTA_ADC   = 0.010f;
+    static constexpr float ADAPT_ALPHA_SLOW = 0.18f;
+    static constexpr float ADAPT_ALPHA_MID  = 0.32f;
+    static constexpr float ADAPT_ALPHA_FAST = 0.58f;
+
+    static constexpr int16_t ZC_HYST = 8;          // ADC counts hysteresis around bias
+    static constexpr uint8_t BIAS_SHIFT = 7;       // IIR speed: 1/128 per sample
 };

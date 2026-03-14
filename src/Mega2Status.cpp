@@ -50,12 +50,14 @@ void buildMega2SafetyStatus(Mega2SafetyStatus& out)
 void buildMega2BlockStatus(BlockStatus* out,
                            const BlockController& bc)
 {
-    // Wichtig: alle Felder initialisieren, sonst erscheinen im WS/JSON Zufallswerte
+    // BlockController arbeitet 1-basiert (Block 1..N).
+    // Das übertragene Array ist aber 0-basiert (Index 0 == Block 1).
     memset(out, 0, sizeof(BlockStatus) * bc.count());
     for (uint8_t i = 0; i < bc.count(); i++)
     {
-        out[i].besetzt  = bc.isOccupied(i);
-        out[i].stromRaw = bc.stromFiltered(i);
+        const uint8_t blockId = (uint8_t)(i + 1u);
+        out[i].besetzt  = bc.isOccupied(blockId);
+        out[i].stromRaw = bc.stromFiltered(blockId);
     }
 }
 

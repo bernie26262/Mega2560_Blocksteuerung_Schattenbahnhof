@@ -53,6 +53,10 @@ private:
     bool     m_besetzt      = false;
     uint32_t m_lastFreeMs   = 0;
 
+    // Strom-Hysterese über abgeschlossene RMS-Fenster
+    uint8_t  m_stromOccCount  = 0;
+    uint8_t  m_stromFreeCount = 0;
+
     // --- Zeitstempel ---
     uint32_t m_lastKontaktHighMs = 0;
     uint32_t m_lastStromZeroMs   = 0;

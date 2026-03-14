@@ -92,7 +92,7 @@ enum SafetyBlockReason : uint8_t
     SAFETY_BLOCK_SSR_STUCK = 4
 };
 
-struct Mega2SafetyStatus
+struct __attribute__((packed)) Mega2SafetyStatus
 {
     uint8_t notausActive;   // 0/1
     uint8_t ssrMask;        // Bit0=MAIN, Bit1=TRAFO_A, Bit2=TRAFO_B
@@ -111,7 +111,7 @@ struct Mega2SafetyStatus
 //   - kurzschluss : Stromfehler
 //   - nothalt     : Safety wirkt auf Block
 // =====================================================
-struct BlockStatus
+struct __attribute__((packed)) BlockStatus
 {
     uint8_t kontakt     : 1;
     uint8_t stromEin    : 1;

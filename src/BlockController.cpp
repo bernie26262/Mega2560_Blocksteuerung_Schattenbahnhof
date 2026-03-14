@@ -7,7 +7,9 @@
 // ------------------------------------------------------------
 // SIM-Currentwerte (nur Debug/Sim)
 // ------------------------------------------------------------
+#if MEGA2_SIM_MODE
 static constexpr uint16_t DBG_SIM_CURRENT_NOMINAL_MA = 300;
+#endif
 static constexpr uint16_t DBG_SIM_CURRENT_SHORT_MA   = 2500;
 
 static inline bool idOk(uint8_t id, uint8_t count)
@@ -38,18 +40,24 @@ void BlockController::update(uint32_t nowMs)
         const bool active = b->stromAktiv();
         m_stromActive[id]   = active;
 
-        if (!active)
-        {
+        if (!active) {
             m_stromFiltered[id] = 0;
         }
-        else
-        {
+        else {
             // Wenn SensorStrom mA liefern kann -> nutzen. Sonst fallback.
             const uint16_t ma = b->stromRms_mA();
-            if (ma != 0)
+#if MEGA2_SIM_MODE
+            // Simulation fallback: provide a nominal current value when
+            // the simulated/current test path reports zero.
+            if (ma != 0) {
                 m_stromFiltered[id] = ma;
-            else
+            } else {
                 m_stromFiltered[id] = DBG_SIM_CURRENT_NOMINAL_MA; // fallback, solange mvPerAmp unbekannt
+            }
+#else
+            // Hardware: Block ist stromaktiv, also mindestens 1 anzeigen
+            m_stromFiltered[id] = (ma > 0) ? ma : 1;
+#endif
         }
 
 #if MEGA2_DEBUG

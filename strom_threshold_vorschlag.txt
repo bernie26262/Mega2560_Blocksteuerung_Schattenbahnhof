@@ -1,0 +1,5 @@
+Otsu threshold (idle vs occupied combined): 49 mA
+Recommended robust OCC threshold for next code test: 40 mA
+Recommended conservative FREE/IDLE upper region from logs: <= 10 mA
+Observed occupied plateaus mostly: ~80..170 mA
+Recommended later with hysteresis: set occupied if >= 40 mA for >= 2 windows; clear if <= 15 mA for >= 2 windows

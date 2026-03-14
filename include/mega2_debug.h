@@ -1,11 +1,5 @@
 #pragma once
 
-// Debug global ein/aus
-//
-// Zusätzliche, gezielte Debug-Kanäle:
-//  - DEBUG_SBHF_SELFTEST=1:
-//      Detaillierte Logs für Selftest-Pulsfluss / Weichen-Pulsweg
-//
 //  - MEGA2_DEBUG=1: Debug-Ausgaben aktiv
 //  - MEGA2_DEBUG=0: Alles kompiliert weg
 
@@ -16,9 +10,6 @@
 #define MEGA2_PERF_QUIET 0
 #endif
 
-#ifndef DEBUG_SBHF_SELFTEST
-#define DEBUG_SBHF_SELFTEST 0
-#endif
 #include <Arduino.h>
 
 #if MEGA2_DEBUG
@@ -52,15 +43,9 @@
     #define DBG_PRINTF(...) dbgPrintf_(__VA_ARGS__)
   #endif
 
-  #if DEBUG_SBHF_SELFTEST
-    #define DBG_SBHF_ST(...) DBG_PRINTF(__VA_ARGS__)
-  #else
-    #define DBG_SBHF_ST(...) do{}while(0)
-  #endif
 #else
   #define DBG_BEGIN(b)
   #define DBG_PRINT(x)
   #define DBG_PRINTLN(x)
   #define DBG_PRINTF(...)
-  #define DBG_SBHF_ST(...)
 #endif

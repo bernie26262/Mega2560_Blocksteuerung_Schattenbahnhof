@@ -30,23 +30,31 @@ void SensorTrafoAC::begin()
         m_qSumSq[i] = 0;
         m_qMin[i] = 0;
         m_qMax[i] = 0;
+        m_qN[i] = 0;
     }
 
     m_rmsFilteredAdc = 0.0f;
     m_rmsFilteredTrafo = 0.0f;
+    m_lastWindowSamples = 0;
+    m_lastGoodWindowMs = 0;
 
     memset(m_lastRms, 0, sizeof(m_lastRms));
     m_lastRmsCount = 0;
     m_lastRmsIdx = 0;
+
+    m_biasQ8 = ((int32_t)512 << 8);
+    m_prevBelow = false;
+    m_prevValid = false;
+    m_windowArmed = false;
+    m_periodCount = 0;
 }
 
-static float medianOfUpTo5(const float* v, uint8_t n)
+static float medianOfUpTo3(const float* v, uint8_t n)
 {
-    // n: 1..5
-    float a[5];
+    float a[3];
     for (uint8_t i = 0; i < n; i++) a[i] = v[i];
 
-    // insertion sort (n <= 5)
+    // insertion sort (n <= 3)
     for (uint8_t i = 1; i < n; i++) {
         float key = a[i];
         int8_t j = (int8_t)i - 1;
@@ -62,6 +70,48 @@ static float medianOfUpTo5(const float* v, uint8_t n)
 
 void SensorTrafoAC::onSampleISR(uint16_t raw)
 {
+    // Adaptive bias tracker + hysteretic zero-crossing detection.
+    // This is much more robust than a hard-coded midpoint of 512.
+    const int32_t rawQ8 = ((int32_t)raw << 8);
+    m_biasQ8 += ((rawQ8 - m_biasQ8) >> BIAS_SHIFT);
+    const int16_t bias = (int16_t)(m_biasQ8 >> 8);
+    const int16_t centered = (int16_t)raw - bias;
+
+    const bool below = (centered <= -ZC_HYST);
+    const bool above = (centered >= +ZC_HYST);
+    bool risingCross = false;
+
+    if (m_prevValid) {
+        // Count a new period only when we really moved from below the bias band
+        // to above the bias band. This suppresses chatter around the midpoint.
+        risingCross = (m_prevBelow && above);
+    }
+
+    if (below) m_prevBelow = true;
+    else if (above) m_prevBelow = false;
+
+    m_prevValid = true;
+
+    // Fenster immer an einem definierten rising zero crossing starten.
+    // Vor dem ersten Crossing noch nichts sammeln, damit das erste Fenster
+    // nicht mitten in einer Periode beginnt.
+    if (!m_windowArmed) {
+        if (risingCross) {
+            m_windowArmed = true;
+            m_periodCount = 0;
+            m_winSamples = 0;
+            m_winSum = 0;
+            m_winSumSq = 0;
+            m_winMin = 1023;
+            m_winMax = 0;
+            m_sampleCount = 0;
+            m_minSample = 1023;
+            m_maxSample = 0;
+            m_prevBelow = false;
+        }
+        return;
+    }
+
     // ISR-safe diagnostics
     const int16_t r = (int16_t)raw;
     if (r < m_winMin) m_winMin = r;
@@ -82,7 +132,11 @@ void SensorTrafoAC::onSampleISR(uint16_t raw)
     m_minSample = m_winMin;
     m_maxSample = m_winMax;
 
-    if (n >= WINDOW_SAMPLES)
+    if (risingCross) {
+        if (m_periodCount < 0xFFu) m_periodCount++;
+    }
+
+    if (m_periodCount >= WINDOW_PERIODS)
     {
         // Push completed window into bounded queue.
         uint8_t w = m_qW;
@@ -90,6 +144,7 @@ void SensorTrafoAC::onSampleISR(uint16_t raw)
         m_qSumSq[w] = m_winSumSq;
         m_qMin[w]   = (uint16_t)m_winMin;
         m_qMax[w]   = (uint16_t)m_winMax;
+        m_qN[w]     = m_winSamples;
 
         w = (uint8_t)((w + 1u) % WIN_Q);
         m_qW = w;
@@ -108,12 +163,16 @@ void SensorTrafoAC::onSampleISR(uint16_t raw)
         m_winSumSq = 0;
         m_winMin = 1023;
         m_winMax = 0;
+        m_periodCount = 0;
+        m_sampleCount = 0;
+        m_minSample = 1023;
+        m_maxSample = 0;
     }
 }
 
 void SensorTrafoAC::update(uint32_t nowMs)
 {
-    (void)nowMs;
+    bool consumedWindow = false;
 
     // Consume completed windows (at most a few).
     while (m_qCount)
@@ -123,6 +182,7 @@ void SensorTrafoAC::update(uint32_t nowMs)
         uint64_t sumSq = 0;
         uint16_t qmin = 1023;
         uint16_t qmax = 0;
+        uint16_t qn = 0;
         noInterrupts();
         if (m_qCount) {
             const uint8_t r = m_qR;
@@ -130,14 +190,24 @@ void SensorTrafoAC::update(uint32_t nowMs)
             sumSq = m_qSumSq[r];
             qmin  = m_qMin[r];
             qmax  = m_qMax[r];
+            qn    = m_qN[r];
             m_qR = (uint8_t)((r + 1u) % WIN_Q);
             m_qCount--;
         }
         interrupts();
 
+        m_lastWindowSamples = qn;
+
+        if (qn == 0u) {
+            continue;
+        }
+
+        consumedWindow = true;
+        m_lastGoodWindowMs = nowMs;
+
         // True RMS in ADC domain via variance:
         // var = E[x^2] - E[x]^2
-        const float n = (float)WINDOW_SAMPLES;
+        const float n = (float)qn;
         const float mean = (float)sum / n;
         const float ex2  = (float)sumSq / n;
         float var = ex2 - (mean * mean);
@@ -155,18 +225,39 @@ void SensorTrafoAC::update(uint32_t nowMs)
         if (vrmsAdc > 3.0f) { vrmsAdc = 0.0f; }
 
         const float vrmsTrafo = vrmsAdc * m_scale;
+ #if defined(MEGA2_DEBUG_TRAFO_RAW)
+        Serial.print(F("[TRAW]["));
+        Serial.print(m_debugLabel ? m_debugLabel : "?");
+        Serial.print(F("] t="));
+        Serial.print(millis());
+
+        Serial.print(F(" adc="));
+        Serial.print(vrmsAdc, 5);
+
+        Serial.print(F(" trafo="));
+        Serial.print(vrmsTrafo, 5);
+
+        Serial.print(F(" min="));
+        Serial.print(qmin);
+
+        Serial.print(F(" max="));
+        Serial.print(qmax);
+
+        Serial.print(F(" n="));
+        Serial.println(qn);
+#endif
 
         // Median + asymmetrische Glättung:
         // - im Normalbetrieb wieder ruhiger/stabiler
         // - bei deutlich fallender Spannung weiterhin schneller nach unten
         // - nahe 0V weiterhin sehr schneller Rücklauf
         m_lastRms[m_lastRmsIdx] = vrmsTrafo;
-        if (m_lastRmsCount < 5u) m_lastRmsCount++;
-        m_lastRmsIdx = (uint8_t)((m_lastRmsIdx + 1u) % 5u);
+        if (m_lastRmsCount < MEDIAN_N) m_lastRmsCount++;
+        m_lastRmsIdx = (uint8_t)((m_lastRmsIdx + 1u) % MEDIAN_N);
 
-        float tmp[5] = {0};
+        float tmp[MEDIAN_N] = {0};
         for (uint8_t i = 0; i < m_lastRmsCount; i++) tmp[i] = m_lastRms[i];
-        const float med = medianOfUpTo5(tmp, m_lastRmsCount);
+        const float med = medianOfUpTo3(tmp, m_lastRmsCount);
 
         const float oldTrafo = m_rmsFilteredTrafo;
         const float oldAdc   = m_rmsFilteredAdc;
@@ -174,69 +265,51 @@ void SensorTrafoAC::update(uint32_t nowMs)
         // ADC-domain median approximated from trafo median to keep both domains aligned.
         const float medAdc = (m_scale > 0.0001f) ? (med / m_scale) : vrmsAdc;
 
-        // Asymmetric filter coefficients
-        // up / flat: calmer in steady operation
-        const float ALPHA_UP       = 0.05f; // 5% new
-        // clear falling edge: faster response
-        const float ALPHA_DOWN     = 0.28f; // 28% new
-        // near zero / trafo off: very fast decay
-        const float ALPHA_NEARZERO = 0.55f; // 55% new
+        // Adaptive post-filter:
+        // - tiny deltas => calmer display
+        // - medium deltas => moderate reaction
+        // - large deltas / near zero => fast reaction
+        const float deltaTrafo = fabsf(med - oldTrafo);
+        const float deltaAdc   = fabsf(medAdc - oldAdc);
 
-        // Thresholds
-        const float DROP_RATIO     = 0.85f; // "significantly lower than before"
-        const float NEARZERO_TRAFO = 1.20f; // below ~1.2V treat as near-zero
-        const float NEARZERO_ADC   = (m_scale > 0.0001f) ? (NEARZERO_TRAFO / m_scale) : 0.05f;
-        const float HOLD_BAND_TRAFO = 0.8f; // ignore small jitter around current value
-        const float HOLD_BAND_ADC   = (m_scale > 0.0001f) ? (HOLD_BAND_TRAFO / m_scale) : 0.02f;
+        auto chooseAlpha = [](float value, float delta, float snapZero, float smallDelta) -> float
+        {
+            if (value <= snapZero) return ADAPT_ALPHA_FAST;
+            if (delta <= smallDelta) return ADAPT_ALPHA_SLOW;
+            if (delta <= (smallDelta * 3.0f)) return ADAPT_ALPHA_MID;
+            return ADAPT_ALPHA_FAST;
+        };
 
-        float alphaTrafo = ALPHA_UP;
-        float alphaAdc   = ALPHA_UP;
+        const float alphaTrafo = chooseAlpha(med,    deltaTrafo, ADAPT_SNAP_ZERO_TRAFO, ADAPT_SMALL_DELTA_TRAFO);
+        const float alphaAdc   = chooseAlpha(medAdc, deltaAdc,   ADAPT_SNAP_ZERO_ADC,   ADAPT_SMALL_DELTA_ADC);
 
-        if (med <= NEARZERO_TRAFO) {
-            alphaTrafo = ALPHA_NEARZERO;
-        } else if ((oldTrafo > 0.01f) && (med < oldTrafo * DROP_RATIO)) {
-            alphaTrafo = ALPHA_DOWN;
+        float nextTrafo = oldTrafo + alphaTrafo * (med    - oldTrafo);
+        float nextAdc   = oldAdc   + alphaAdc   * (medAdc - oldAdc);
+
+        // Clean snap-to-zero after filtering so near-off regions do not "float".
+        if (med <= ADAPT_SNAP_ZERO_TRAFO && nextTrafo < ADAPT_SNAP_ZERO_TRAFO) {
+            nextTrafo = 0.0f;
         }
-
-        if (medAdc <= NEARZERO_ADC) {
-            alphaAdc = ALPHA_NEARZERO;
-        } else if ((oldAdc > 0.001f) && (medAdc < oldAdc * DROP_RATIO)) {
-            alphaAdc = ALPHA_DOWN;
+        if (medAdc <= ADAPT_SNAP_ZERO_ADC && nextAdc < ADAPT_SNAP_ZERO_ADC) {
+            nextAdc = 0.0f;
         }
-
-        float targetTrafo = med;
-        float targetAdc   = medAdc;
-
-        // Hold-band against jitter in normal operation:
-        // keep the displayed value if the new median only differs slightly.
-        // Do NOT hold near zero and do NOT hold on clear falling edges.
-        const bool trafoNearZero = (med <= NEARZERO_TRAFO);
-        const bool adcNearZero   = (medAdc <= NEARZERO_ADC);
-        const bool trafoFastDown = ((oldTrafo > 0.01f) && (med < oldTrafo * DROP_RATIO));
-        const bool adcFastDown   = ((oldAdc > 0.001f) && (medAdc < oldAdc * DROP_RATIO));
-
-        if (!trafoNearZero && !trafoFastDown && fabsf(med - oldTrafo) < HOLD_BAND_TRAFO) {
-            targetTrafo = oldTrafo;
-        }
-        if (!adcNearZero && !adcFastDown && fabsf(medAdc - oldAdc) < HOLD_BAND_ADC) {
-            targetAdc = oldAdc;
-        }
-
-        float nextTrafo = (oldTrafo * (1.0f - alphaTrafo)) + (targetTrafo * alphaTrafo);
-        float nextAdc   = (oldAdc   * (1.0f - alphaAdc))   + (targetAdc   * alphaAdc);
 
         // Slew limiter for NORMAL operation only:
         // limit visible step size per completed RMS window.
-        // Keep fast-down / near-zero behaviour untouched.
-        const float MAX_STEP_TRAFO = 0.35f; // V per window (~0.5 s)
+        // Keep large real changes responsive enough, but suppress visible jumps.
+        // 2.5 V per 0.5 s => ~5 V/s, much more responsive than before.
+        const float MAX_STEP_TRAFO = 2.50f; // V per window (~0.5 s)
         const float MAX_STEP_ADC   = (m_scale > 0.0001f) ? (MAX_STEP_TRAFO / m_scale) : 0.01f;
 
-        if (!trafoNearZero && !trafoFastDown) {
-           const float d = nextTrafo - oldTrafo;
+        const bool limitTrafo = (med > ADAPT_SNAP_ZERO_TRAFO) && (deltaTrafo <= (ADAPT_SMALL_DELTA_TRAFO * 6.0f));
+        const bool limitAdc   = (medAdc > ADAPT_SNAP_ZERO_ADC) && (deltaAdc <= (ADAPT_SMALL_DELTA_ADC * 6.0f));
+
+        if (limitTrafo) {
+            const float d = nextTrafo - oldTrafo;
             if (d >  MAX_STEP_TRAFO) nextTrafo = oldTrafo + MAX_STEP_TRAFO;
             if (d < -MAX_STEP_TRAFO) nextTrafo = oldTrafo - MAX_STEP_TRAFO;
         }
-        if (!adcNearZero && !adcFastDown) {
+        if (limitAdc) {
             const float d = nextAdc - oldAdc;
             if (d >  MAX_STEP_ADC) nextAdc = oldAdc + MAX_STEP_ADC;
             if (d < -MAX_STEP_ADC) nextAdc = oldAdc - MAX_STEP_ADC;
@@ -248,6 +321,39 @@ void SensorTrafoAC::update(uint32_t nowMs)
         // Cache integer representations for cheap debug printing
         m_rmsFilteredTrafo_cV = (uint16_t)lroundf(m_rmsFilteredTrafo * 100.0f);
         m_rmsFilteredAdc_mV   = (uint16_t)lroundf(m_rmsFilteredAdc   * 1000.0f);
+    }
+
+    // If no fresh RMS window arrives for a while, the AC measurement has
+    // effectively gone inactive (e.g. trafo turned off and no more clean
+    // zero-cross based windows complete). In that case, actively decay the
+    // displayed value toward zero instead of holding the last value forever.
+    //
+    // 500 ms is long enough to avoid fighting the normal window cadence,
+    // but short enough that the UI no longer appears "stuck on".
+    if (!consumedWindow) {
+        const uint32_t staleMs = (m_lastGoodWindowMs == 0u) ? 0u : (uint32_t)(nowMs - m_lastGoodWindowMs);
+        if (m_lastGoodWindowMs != 0u && staleMs >= 500u) {
+            const float DECAY = 0.55f;   // fairly quick visible drop
+            const float SNAP_TO_ZERO_TRAFO = 0.15f;
+            const float SNAP_TO_ZERO_ADC   = 0.01f;
+
+            m_rmsFilteredTrafo *= (1.0f - DECAY);
+            m_rmsFilteredAdc   *= (1.0f - DECAY);
+
+            if (m_rmsFilteredTrafo < SNAP_TO_ZERO_TRAFO) m_rmsFilteredTrafo = 0.0f;
+            if (m_rmsFilteredAdc   < SNAP_TO_ZERO_ADC)   m_rmsFilteredAdc   = 0.0f;
+
+            m_rmsFilteredTrafo_cV = (uint16_t)lroundf(m_rmsFilteredTrafo * 100.0f);
+            m_rmsFilteredAdc_mV   = (uint16_t)lroundf(m_rmsFilteredAdc   * 1000.0f);
+
+            // Reset median history once we are stale, so the next power-up
+            // starts clean and is not biased by old non-zero windows.
+            if (m_rmsFilteredTrafo == 0.0f && m_rmsFilteredAdc == 0.0f) {
+                memset(m_lastRms, 0, sizeof(m_lastRms));
+                m_lastRmsCount = 0;
+                m_lastRmsIdx = 0;
+            }
+        }
     }
 }
 

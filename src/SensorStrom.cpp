@@ -33,6 +33,11 @@ void SensorStrom::begin()
     m_winCount = 0;
     m_winSum = 0;
     m_winSumSq = 0;
+    m_winMin = 1023;
+    m_winMax = 0;
+    m_lastWinMin = 0;
+    m_lastWinMax = 0;
+    m_lastWinSamples = 0;
     m_hasInit = false;
 }
 
@@ -56,7 +61,8 @@ void SensorStrom::update()
     m_lastMs = nowMs;
 
     // Window size in samples (non-overlapping windows like TrueRMS).
-    // With 500 Hz sampling, 64 samples ~= 128 ms update rate (~7.8 Hz).
+    // With the current scheduler, each Stromkanal gets 200 Hz.
+    // Therefore 64 samples ~= 320 ms update rate (~3.1 Hz).
     static const uint16_t WIN_SAMPLES = 64;
 
     // Idle detection thresholds (counts)
@@ -71,6 +77,8 @@ void SensorStrom::update()
         m_winCount = 0;
         m_winSum = 0;
         m_winSumSq = 0;
+        m_winMin = 1023;
+        m_winMax = 0;
     }
 
     if (!m_powered && m_lastPowered) {
@@ -78,6 +86,8 @@ void SensorStrom::update()
         // Do NOT write artificial zeros; let filter decay naturally.
         m_winCount = 0;
         m_winSum = 0;
+        m_winMin = 1023;
+        m_winMax = 0;
         m_winSumSq = 0;
     }
 
@@ -115,6 +125,11 @@ void SensorStrom::update()
             m_idleMs = 0;
             m_winCount = 0;
             m_winSum = 0;
+            m_winMin = 1023;
+            m_winMax = 0;
+            m_lastWinMin = 0;
+            m_lastWinMax = 0;
+            m_lastWinSamples = 0;
             m_winSumSq = 0;
             m_hasInit = true;
         }
@@ -127,6 +142,8 @@ void SensorStrom::update()
         // Accumulate window stats
         m_winCount++;
         m_winSum += (uint32_t)v;
+        if (v < m_winMin) m_winMin = v;
+        if (v > m_winMax) m_winMax = v;
         m_winSumSq += (uint64_t)v * (uint64_t)v;
 
         if (m_winCount >= WIN_SAMPLES)
@@ -167,10 +184,16 @@ void SensorStrom::update()
                 m_noiseFloor = (uint16_t)((uint32_t(m_noiseFloor) * 3u + m_rmsFiltered) / 4u);
             }
 
+            m_lastWinMin = m_winMin;
+            m_lastWinMax = m_winMax;
+            m_lastWinSamples = n;
+
             // Reset window (non-overlapping)
             m_winCount = 0;
             m_winSum = 0;
             m_winSumSq = 0;
+            m_winMin = 1023;
+            m_winMax = 0;
         }
     }
 

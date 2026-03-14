@@ -49,6 +49,13 @@
 #define MEGA2_PERF_NO_I2C 0
 #endif
 
+#ifndef MEGA2_ADC_ONLY_TRAFO_OBEN
+#define MEGA2_ADC_ONLY_TRAFO_OBEN 0
+#endif
+
+#ifndef MEGA2_DEBUG_STROM_BLOCKS
+#define MEGA2_DEBUG_STROM_BLOCKS 0
+#endif
 
 // ============================================================================
 // GLOBALE OBJEKTE
@@ -113,8 +120,34 @@ static void adcIsrSink(uint8_t channel, uint16_t value)
 {
     const uint8_t chOben  = (uint8_t)(PIN_ADC_TRAFO_OBEN  - A0);
     const uint8_t chUnten = (uint8_t)(PIN_ADC_TRAFO_UNTEN - A0);
-    if (channel == chOben)  { g_trafoOben.onSampleISR(value); return; }
-    if (channel == chUnten) { g_trafoUnten.onSampleISR(value); return; }
+    static uint8_t s_lastTrafoChannel = 0xFF;
+    static uint8_t s_sameTrafoCount = 0;
+
+    if (channel == chOben || channel == chUnten) {
+        // After switching between ADC channels, the first conversions can still
+        // be contaminated by the previous channel / S&H capacitor state.
+        // Diagnostic step: require multiple same-channel conversions before we
+        // accept a trafo sample.
+        if (channel != s_lastTrafoChannel) {
+            s_lastTrafoChannel = channel;
+            s_sameTrafoCount = 1;
+            return;
+        }
+
+        if (s_sameTrafoCount < 0xFFu) s_sameTrafoCount++;
+
+        // Use only the later samples of each 5-sample burst.
+        // 1st/2nd/3rd sample after a switch are discarded.
+        if (s_sameTrafoCount <= 3u) return;
+
+        if (channel == chOben)  { g_trafoOben.onSampleISR(value); return; }
+        if (channel == chUnten) { g_trafoUnten.onSampleISR(value); return; }
+    }
+
+    // Any non-trafo channel means the ADC MUX has moved away from the trafo
+    // input. Force a fresh discard when we return to a trafo channel.
+    s_lastTrafoChannel = 0xFF;
+    s_sameTrafoCount = 0;
 }
 
 // --------------------- ANALOG SNAPSHOT (I2C) --------------------------------
@@ -565,6 +598,11 @@ void setup()
     g_bootId = makeBootId16();
 
     DBG_BEGIN(115200);
+#if defined(MEGA2_DEBUG_TRAFO_RAW) || defined(MEGA2_DEBUG_STROM_BLOCKS)
+     Serial.begin(115200);
+#endif
+
+
     while (!Serial && millis() < 1000) {}
 
     // --------------------------------------------------------------------
@@ -643,32 +681,109 @@ void setup()
     g_power.begin();
     g_trafoOben.begin();
     g_trafoUnten.begin();
+    g_trafoOben.setDebugLabel("OBEN");
+    g_trafoUnten.setDebugLabel("UNTEN");
 
     // --------------------------------------------------------------------
     // ADC Scheduler: deterministic sampling independent from loop() jitter.
-    // Total ~2800 samples/s (Timer1 ~2809Hz):
-    //   - Trafo oben/unten: 500Hz each (5 slots per 10ms)
-    //   - 9x Strom: 200Hz each (2 slots per 10ms)
-    // Schedule wheel length 28 => 10ms per wheel.
+    //
+    // 79e Diagnose-/Zwischenstand:
+    //   - Trafo-Messung wurde deutlich stabiler, sobald die langen Cluster
+    //     durch kurze, haeufige Bursts ersetzt wurden.
+    //   - adcIsrSink() verwirft derzeit nach jedem Trafo-Kanalwechsel
+    //     die ersten 3 Samples.
+    //
+    // Daher fuer den naechsten Test:
+    //   - Trafo weiter in kurzen 4er-Bursts
+    //   - Strom vorsichtig wieder dazu, jeweils in 2er-Bursts
+    //   - zunaechst nur Block 1..6, noch ohne SBHF 1..3
+    //
+    // Ziel:
+    //   - pruefen, ob die Trafo-Stabilitaet auch mit "echten" Fremdkanaelen
+    //     im MUX-Rad erhalten bleibt
     // --------------------------------------------------------------------
+#if MEGA2_ADC_ONLY_TRAFO_UNTEN
     static const uint8_t s_adcSchedule[28] = {
-        // 10x Trafo (5 each)
-        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_UNTEN,
-        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_UNTEN,
-        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_UNTEN,
-        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_UNTEN,
-        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_UNTEN,
-        // 18x Strom (2 each)
-        PIN_ADC_BLOCK1, PIN_ADC_BLOCK2, PIN_ADC_BLOCK3,
-        PIN_ADC_BLOCK4, PIN_ADC_BLOCK5, PIN_ADC_BLOCK6,
-        PIN_ADC_SBH_GL1, PIN_ADC_SBH_GL2, PIN_ADC_SBH_GL3,
-        PIN_ADC_BLOCK1, PIN_ADC_BLOCK2, PIN_ADC_BLOCK3,
-        PIN_ADC_BLOCK4, PIN_ADC_BLOCK5, PIN_ADC_BLOCK6,
-        PIN_ADC_SBH_GL1, PIN_ADC_SBH_GL2, PIN_ADC_SBH_GL3,
+        PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN,
     };
+#elif MEGA2_ADC_ONLY_TRAFO_OBEN
+    static const uint8_t s_adcSchedule[28] = {
+        PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN,
+        PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN,
+        PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN,
+        PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN,
+        PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN,
+        PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN,
+        PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN,
+    };
+#else
+    static const uint8_t s_adcSchedule[28] = {
+        // 28 Slots gesamt:
+        //   - Trafo oben:   2 Bursts x 4 Slots
+        //   - Trafo unten:  2 Bursts x 4 Slots
+        //   - Strom Block1..6: je 1 Burst x 2 Slots
+        //
+        // Wirkung mit aktuellem adcIsrSink():
+        //   - Trafo:  3 discard + 1 Nutzsample pro 4er-Burst
+        //   - Strom:  unveraendert ueber Queue/SensorStrom
+        //
+        // Die Reihenfolge ist absichtlich kurzburstig:
+        //   4x OBEN, 4x UNTEN, 2x B1, 2x B4,
+        //   4x OBEN, 4x UNTEN, 2x B2, 2x B5, 2x B3, 2x B6
+        //
+        // So bleiben die Trafo-Samples zeitlich gut verteilt, waehrend wir
+        // gleichzeitig kontrolliert echte Fremdkanaele in den MUX-Rad holen.
+        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_OBEN,
+        PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_BLOCK1,      PIN_ADC_BLOCK1,
+        PIN_ADC_BLOCK4,      PIN_ADC_BLOCK4,
+
+        PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_OBEN,  PIN_ADC_TRAFO_OBEN,
+        PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN, PIN_ADC_TRAFO_UNTEN,
+        PIN_ADC_BLOCK2,      PIN_ADC_BLOCK2,
+        PIN_ADC_BLOCK5,      PIN_ADC_BLOCK5,
+        PIN_ADC_BLOCK3,      PIN_ADC_BLOCK3,
+        PIN_ADC_BLOCK6,      PIN_ADC_BLOCK6,
+    };
+#endif
 
     adcSchedSetIsrSink(adcIsrSink);
     adcSchedBegin(s_adcSchedule, (uint8_t)sizeof(s_adcSchedule));
+
+
+    Serial.println(F("[CFG] Mega2 boot"));
+    Serial.print(F("[CFG] TRAW="));
+#if defined(MEGA2_DEBUG_TRAFO_RAW)
+    Serial.print(1);
+#else
+    Serial.print(0);
+#endif
+    Serial.print(F(" A10ONLY="));
+#if MEGA2_ADC_ONLY_TRAFO_UNTEN
+    Serial.print(1);
+#else
+    Serial.print(0);
+#endif
+    Serial.print(F(" A9ONLY="));
+#if MEGA2_ADC_ONLY_TRAFO_OBEN
+    Serial.print(1);
+#else
+    Serial.print(0);
+#endif
+    Serial.print(F(" WINDOW_MS="));
+    Serial.print(SensorTrafoAC::windowMs());
+    Serial.print(F(" SAMPLE_HZ="));
+    Serial.print(SensorTrafoAC::sampleHz());
+    Serial.print(F(" WINDOW_SAMPLES="));
+    Serial.print(SensorTrafoAC::windowSamples());
+    Serial.print(F(" WIN_Q="));
+    Serial.println(SensorTrafoAC::winQ());
 
     // Trafo channels are processed in ISR (min/max window). Disable queueing
     // to avoid pointless ring drops.
@@ -701,13 +816,15 @@ void setup()
 void loop()
 {
     const uint32_t now = millis();
-    const uint32_t nowUs = micros();
+    
 
+#if MEGA2_DEBUG
     // Simple loop counter (debug): average loops per second over 5s
     static uint32_t s_loopCount = 0;
     static uint32_t s_loopCountStartMs = 0;
     static uint32_t s_stromMissedTicks = 0;
     static uint32_t s_lastStromUpdateMsSeen = 0;
+#endif
 
 #if MEGA2_DEBUG
     if (s_loopCountStartMs == 0) s_loopCountStartMs = now;
@@ -732,11 +849,12 @@ void loop()
 
 
     // Loop timing diagnostics (max gap) – optional
+#if DEBUG_LOOP_PERFORMANCE
+    const uint32_t nowUs = micros();    
     static uint32_t s_lastLoopUs = 0;
     uint32_t loopDtUs = 0;
     if (s_lastLoopUs != 0) loopDtUs = (uint32_t)(nowUs - s_lastLoopUs);
     s_lastLoopUs = nowUs;
-#if DEBUG_LOOP_PERFORMANCE
     mega2DebugLoopTick(now, loopDtUs);
 #endif
 
@@ -814,6 +932,43 @@ void loop()
         strom1.update(); strom2.update(); strom3.update();
         strom4.update(); strom5.update(); strom6.update();
         stromSbhf1.update(); stromSbhf2.update(); stromSbhf3.update();
+        
+#if MEGA2_DEBUG_STROM_BLOCKS
+        static uint32_t s_lastStromBlockLogMs = 0;
+        if ((uint32_t)(now - s_lastStromBlockLogMs) >= 250u)
+        {
+            s_lastStromBlockLogMs = now;
+
+            auto logStromBlock = [&](uint8_t blockId, const SensorStrom& s)
+            {
+                Serial.print(F("[IBLOCK] t="));
+                Serial.print(now);
+                Serial.print(F(" block="));
+                Serial.print(blockId);
+                Serial.print(F(" raw="));
+                Serial.print(s.raw());
+                Serial.print(F(" off="));
+                Serial.print(s.offset());
+                Serial.print(F(" abs="));
+                Serial.print(s.absDevCounts());
+                Serial.print(F(" rmsRaw="));
+                Serial.print(s.rmsCountsRaw());
+                Serial.print(F(" rms="));
+                Serial.print(s.rmsCounts());
+                Serial.print(F(" mA="));
+                Serial.print(s.rms_mA());
+                Serial.print(F(" min="));
+                Serial.print(s.lastWinMin());
+                Serial.print(F(" max="));
+                Serial.print(s.lastWinMax());
+                Serial.print(F(" n="));
+                Serial.println(s.lastWinSamples());
+            };
+
+            logStromBlock(2, strom2);
+            logStromBlock(4, strom4);
+        }
+#endif
     }
 
 

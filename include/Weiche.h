@@ -20,7 +20,7 @@ public:
     uint8_t id() const { return m_id; }
     void update(uint32_t now);
 
-    bool schalte(Stellung s, bool force = false);
+    bool schalte(Stellung s, uint32_t nowMs, bool force = false);
 
     Stellung getStellung() const { return m_stellung; }
     bool rueckmeldungAbbiegen() const;
@@ -29,11 +29,11 @@ public:
     void clearSim();
 
     inline void setGerade() {
-        (void)schalte(GERADE, false);
+        (void)schalte(GERADE, millis(), false);
     }
 
     inline void setAbzweig() {
-        (void)schalte(ABBIEGEN, false);
+        (void)schalte(ABBIEGEN, millis(), false);
     }
 
 private:
