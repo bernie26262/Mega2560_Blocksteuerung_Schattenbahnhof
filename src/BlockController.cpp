@@ -4,6 +4,47 @@
 #include "mega2_debug.h"
 #include "safety.h"  // safetyTriggerBlockShort()
 
+#ifndef MEGA2_DEBUG_BLOCK_GRANT
+#define MEGA2_DEBUG_BLOCK_GRANT 0
+#endif
+
+#if MEGA2_DEBUG_BLOCK_GRANT
+static uint32_t s_lastBgrantLogMs = 0;
+static inline void logBgrantRateLimited(uint32_t nowMs,
+                                        uint8_t fromBlock,
+                                        uint8_t toBlock,
+                                        bool granted,
+                                        bool free,
+                                        bool occupied,
+                                        uint8_t grantTo4From,
+                                        uint32_t req3Ms,
+                                        uint32_t req6Ms)
+{
+    if ((uint32_t)(nowMs - s_lastBgrantLogMs) < 200u)
+        return;
+
+    s_lastBgrantLogMs = nowMs;
+
+    Serial.print(F("[BGRANT] "));
+    Serial.print(fromBlock);
+    Serial.print(F("->"));
+    Serial.print(toBlock);
+    Serial.print(F(" granted="));
+    Serial.print(granted ? 1 : 0);
+    Serial.print(F(" free="));
+    Serial.print(free ? 1 : 0);
+    Serial.print(F(" occ="));
+    Serial.print(occupied ? 1 : 0);
+    Serial.print(F(" grant="));
+    Serial.print(grantTo4From);
+    Serial.print(F(" req3="));
+    Serial.print(req3Ms);
+    Serial.print(F(" req6="));
+    Serial.println(req6Ms);
+}
+#endif
+
+
 // ------------------------------------------------------------
 // SIM-Currentwerte (nur Debug/Sim)
 // ------------------------------------------------------------
@@ -238,16 +279,29 @@ bool BlockController::isOccupied(uint8_t id) const
 
 bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
 {
-    (void)fromBlock;
-
     if (!idOk(toBlock, m_count))
         return false;
 
     // Merge/Arbitration: für Block 4 nur wenn Grant für den 'fromBlock' aktiv ist
     if (toBlock == 4)
     {
-        if (!entryGranted(fromBlock, toBlock))
+        const bool granted = entryGranted(fromBlock, toBlock);
+        if (!granted)
+        {
+#if MEGA2_DEBUG_BLOCK_GRANT
+            const uint32_t now = millis();
+            logBgrantRateLimited(now,
+                                 fromBlock,
+                                 toBlock,
+                                 false,
+                                 false,
+                                 isOccupied(4),
+                                 m_grantTo4_from,
+                                 m_reqB4_from3_ms,
+                                 m_reqB4_from6_ms);
+#endif
             return false;
+        }
     }
 
 #if MEGA2_DEBUG
@@ -267,8 +321,23 @@ bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
 
     // Normalbetrieb: Freigabe erst, wenn Block wirklich frei ist (Debounce/Delay)
     Block* b = m_blocks[toBlock];
-    if (!b) return !isOccupied(toBlock);
-    return b->isReallyFree(millis());
+    const bool occ = isOccupied(toBlock);
+    const uint32_t now = millis();
+    const bool free = b ? b->isReallyFree(now) : !occ;
+
+#if MEGA2_DEBUG_BLOCK_GRANT
+    logBgrantRateLimited(now,
+                         fromBlock,
+                         toBlock,
+                         true,
+                         free,
+                         occ,
+                         m_grantTo4_from,
+                         m_reqB4_from3_ms,
+                         m_reqB4_from6_ms);
+#endif
+
+    return free;
 }
 
 #if MEGA2_DEBUG

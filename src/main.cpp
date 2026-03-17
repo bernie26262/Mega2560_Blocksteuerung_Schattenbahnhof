@@ -57,6 +57,18 @@
 #define MEGA2_DEBUG_STROM_BLOCKS 0
 #endif
 
+#ifndef MEGA2_DEBUG_BLOCK_OCC
+#define MEGA2_DEBUG_BLOCK_OCC 0
+#endif
+
+#ifndef MEGA2_DEBUG_BLOCK_GRANT
+#define MEGA2_DEBUG_BLOCK_GRANT 0
+#endif
+
+#ifndef MEGA2_DEBUG_BLOCK_RELAYS
+#define MEGA2_DEBUG_BLOCK_RELAYS 0
+#endif
+
 // ============================================================================
 // GLOBALE OBJEKTE
 // ============================================================================
@@ -586,6 +598,104 @@ static void dbgMaybePrintSysFlags(uint16_t flags)
 }
 #endif // MEGA2_DEBUG
 
+#if MEGA2_DEBUG_BLOCK_RELAYS
+static void logBrelayChange(uint32_t now,
+                            const __FlashStringHelper* label,
+                            uint8_t pin,
+                            bool allow,
+                            bool wantOn)
+{
+    static bool     s_init[54]      = {};
+    static bool     s_lastAllow[54] = {};
+    static bool     s_lastWant[54]  = {};
+    static uint8_t  s_lastLevel[54] = {};
+
+    const uint8_t level = (uint8_t)digitalRead(pin);
+    const bool changed = !s_init[pin]
+                      || s_lastAllow[pin] != allow
+                      || s_lastWant[pin]  != wantOn
+                      || s_lastLevel[pin] != level;
+
+    if (!changed)
+        return;
+
+    s_init[pin]      = true;
+    s_lastAllow[pin] = allow;
+    s_lastWant[pin]  = wantOn;
+    s_lastLevel[pin] = level;
+
+    Serial.print(F("[BRELAY] t="));
+    Serial.print(now);
+    Serial.print(F(" path="));
+    Serial.print(label);
+    Serial.print(F(" pin="));
+    Serial.print(pin);
+    Serial.print(F(" allow="));
+    Serial.print(allow ? 1 : 0);
+    Serial.print(F(" want="));
+    Serial.print(wantOn ? 1 : 0);
+    Serial.print(F(" level="));
+    Serial.print(level == LOW ? 0 : 1);
+    Serial.print(F(" activeLowOn="));
+    Serial.println((allow && wantOn && level == LOW) ? 1 : 0);
+}
+#endif
+
+
+static void updateBlockGrantRelays()
+{
+    // Boot-/Safety-/DIAG-sicher: nur im normalen Fahrbetrieb freigeben.
+    const bool allow = g_power.isMainPowerOn() && !mega2IsDiagTest();
+
+    const bool want12 = allow ? g_bc.canEnter(1, 2) : false;
+    const bool want23 = allow ? g_bc.canEnter(2, 3) : false;
+    const bool want34 = allow ? g_bc.canEnter(3, 4) : false;
+    const bool want41 = allow ? g_bc.canEnter(4, 1) : false;
+    const bool want45 = allow ? g_bc.canEnter(4, 5) : false;
+    const bool want64 = allow ? g_bc.canEnter(6, 4) : false;
+
+    if (!allow)
+    {
+        g_power.setBlock1To2(false);
+        g_power.setBlock2To3(false);
+        g_power.setBlock3To4(false);
+        g_power.setBlock4To1(false);
+        g_power.setBlock4To5(false);
+        g_power.setBlock6To4(false);
+        
+#if MEGA2_DEBUG_BLOCK_RELAYS
+        const uint32_t now = millis();
+        logBrelayChange(now, F("1->2"), PIN_RELAY_BLOCK1_NACH2, allow, false);
+        logBrelayChange(now, F("2->3"), PIN_RELAY_BLOCK2_NACH3, allow, false);
+        logBrelayChange(now, F("3->4"), PIN_RELAY_BLOCK3_NACH4, allow, false);
+        logBrelayChange(now, F("4->1"), PIN_RELAY_BLOCK4_NACH1, allow, false);
+        logBrelayChange(now, F("4->5"), PIN_RELAY_BLOCK4_NACH5, allow, false);
+        logBrelayChange(now, F("6->4"), PIN_RELAY_BLOCK6_NACH4, allow, false);
+#endif
+        return;
+    }
+
+    g_power.setBlock1To2(want12);
+    g_power.setBlock2To3(want23);
+    g_power.setBlock3To4(want34);
+    g_power.setBlock4To1(want41);
+    g_power.setBlock4To5(want45);
+    g_power.setBlock6To4(want64);
+
+#if MEGA2_DEBUG_BLOCK_RELAYS
+    {
+        const uint32_t now = millis();
+        logBrelayChange(now, F("1->2"), PIN_RELAY_BLOCK1_NACH2, allow, want12);
+        logBrelayChange(now, F("2->3"), PIN_RELAY_BLOCK2_NACH3, allow, want23);
+        logBrelayChange(now, F("3->4"), PIN_RELAY_BLOCK3_NACH4, allow, want34);
+        logBrelayChange(now, F("4->1"), PIN_RELAY_BLOCK4_NACH1, allow, want41);
+        logBrelayChange(now, F("4->5"), PIN_RELAY_BLOCK4_NACH5, allow, want45);
+        logBrelayChange(now, F("6->4"), PIN_RELAY_BLOCK6_NACH4, allow, want64);
+    }
+#endif
+}
+
+
 // ============================================================================
 // SETUP
 // ============================================================================
@@ -598,8 +708,8 @@ void setup()
     g_bootId = makeBootId16();
 
     DBG_BEGIN(115200);
-#if defined(MEGA2_DEBUG_TRAFO_RAW) || defined(MEGA2_DEBUG_STROM_BLOCKS)
-     Serial.begin(115200);
+#if MEGA2_DEBUG_TRAFO_RAW || MEGA2_DEBUG_STROM_BLOCKS || MEGA2_DEBUG_BLOCK_OCC || MEGA2_DEBUG_BLOCK_GRANT || MEGA2_DEBUG_BLOCK_RELAYS
+    Serial.begin(115200);
 #endif
 
 
@@ -989,7 +1099,13 @@ void loop()
         {
             lastSbhfUpdate = now;
             g_sbhf.update(now);
+            updateBlockGrantRelays();
         }
+    }
+    else
+    {
+        // In DIAG_TEST keine Automatik-Freigaberelais aktiv halten.
+        updateBlockGrantRelays();
     }
 
     if (now - lastWeichenUpdate >= WEICHEN_UPDATE_MS)

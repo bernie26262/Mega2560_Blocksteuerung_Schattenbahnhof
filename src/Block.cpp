@@ -12,6 +12,10 @@
 #define MEGA2_DEBUG_BLOCK_OCC 0
 #endif
 
+#if MEGA2_DEBUG_BLOCK_OCC
+static uint32_t s_boccLastLogMs[10] = {0}; // Block-IDs 1..9
+#endif
+
 // Optional: Event-Logging pro Block (nur Edge, nicht "polling-spam")
 #ifndef MEGA2_DEBUG_BLOCK_EVENTS
 #define MEGA2_DEBUG_BLOCK_EVENTS 0
@@ -199,33 +203,32 @@ void Block::update(uint32_t nowMs)
     #endif
     }
 #if MEGA2_DEBUG_BLOCK_OCC
-    static uint32_t s_lastLogMs = 0;
-    if ((nowMs - s_lastLogMs) > 250)
+    if (m_id < 10 && (uint32_t)(nowMs - s_boccLastLogMs[m_id]) > 250u)
     {
-        s_lastLogMs = nowMs;
+        s_boccLastLogMs[m_id] = nowMs;
 
-        DBG_PRINT(F("[BOCC] B"));
-        DBG_PRINT(m_id);
+        Serial.print(F("[BOCC] B"));
+        Serial.print(m_id);
 
-        DBG_PRINT(F(" I="));
-        DBG_PRINT(stromRms_mA());
+        Serial.print(F(" I="));
+        Serial.print(stromRms_mA());
 
-        DBG_PRINT(F(" occ="));
-        DBG_PRINT(m_besetzt);
+        Serial.print(F(" occ="));
+        Serial.print(m_besetzt ? 1 : 0);
 
-        DBG_PRINT(F(" k="));
-        DBG_PRINT(m_kontaktAktiv);
+        Serial.print(F(" k="));
+        Serial.print(m_kontaktAktiv ? 1 : 0);
 
-        DBG_PRINT(F(" s="));
-        DBG_PRINT(m_stromAktiv);
+        Serial.print(F(" s="));
+        Serial.print(m_stromAktiv ? 1 : 0);
 
-        DBG_PRINT(F(" oc="));
-        DBG_PRINT(m_stromOccCount);
+        Serial.print(F(" oc="));
+        Serial.print(m_stromOccCount);
 
-        DBG_PRINT(F(" fc="));
-        DBG_PRINT(m_stromFreeCount);
+        Serial.print(F(" fc="));
+        Serial.print(m_stromFreeCount);
 
-        DBG_PRINTLN();
+        Serial.println();
     }
 #endif
 }

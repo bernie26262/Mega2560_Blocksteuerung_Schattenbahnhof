@@ -34,6 +34,30 @@ public:
         setMainPower(false);
     }
 
+    void setBlock1To2(bool on) {
+        digitalWrite(PIN_RELAY_BLOCK1_NACH2, on ? LOW : HIGH);
+    }
+
+    void setBlock2To3(bool on) {
+        digitalWrite(PIN_RELAY_BLOCK2_NACH3, on ? LOW : HIGH);
+    }
+
+    void setBlock3To4(bool on) {
+        digitalWrite(PIN_RELAY_BLOCK3_NACH4, on ? LOW : HIGH);
+    }
+
+    void setBlock4To1(bool on) {
+        digitalWrite(PIN_RELAY_BLOCK4_NACH1, on ? LOW : HIGH);
+    }
+
+    void setBlock4To5(bool on) {
+        digitalWrite(PIN_RELAY_BLOCK4_NACH5, on ? LOW : HIGH);
+    }
+
+    void setBlock6To4(bool on) {
+        digitalWrite(PIN_RELAY_BLOCK6_NACH4, on ? LOW : HIGH);
+    }
+
     void setBlock5ToSBhf(bool on) override {
         digitalWrite(PIN_RELAY_BLOCK5_NACH_SBH, on ? LOW : HIGH);
     }
