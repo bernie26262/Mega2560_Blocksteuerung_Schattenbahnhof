@@ -8,12 +8,12 @@ class Mega2PowerControl : public PowerControl {
 public:
     // NOTE: PowerControl has no begin(); this is Mega2-specific init.
     void begin() {
-        // Global Power-Cut Relais (Trafo oben/unten) – low-aktiv ("CUT")
+        // Global Power-Relais: sicherer AUS-Zustand = HIGH
+        // Glitch-sicher: erst Pegel setzen, dann OUTPUT aktivieren.
+        digitalWrite(PIN_RELAY_TRAFO_OBEN_CUT,  HIGH);
+        digitalWrite(PIN_RELAY_TRAFO_UNTEN_CUT, HIGH);
         pinMode(PIN_RELAY_TRAFO_OBEN_CUT,  OUTPUT);
         pinMode(PIN_RELAY_TRAFO_UNTEN_CUT, OUTPUT);
-        // Boot-sicher: sofort "CUT aktiv" setzen (low-aktiv)
-        digitalWrite(PIN_RELAY_TRAFO_OBEN_CUT,  LOW);
-        digitalWrite(PIN_RELAY_TRAFO_UNTEN_CUT, LOW);
 
         // Stromrelais (low-aktiv): IMMER als OUTPUT initialisieren.
         // Wichtig: Ohne OUTPUT bleibt digitalWrite() nur Pull-Up-Steuerung (Input-mode)
@@ -97,14 +97,14 @@ public:
     void setSsrTrafoA(bool enable)
     {
         m_ssrTrafoAEnabled = enable;
-        digitalWrite(PIN_RELAY_TRAFO_OBEN_CUT, enable ? HIGH : LOW);
+        digitalWrite(PIN_RELAY_TRAFO_OBEN_CUT, enable ? LOW : HIGH);
     }
 
     // SSR_TRAFO_B = Trafo unten (CUT Relais)
     void setSsrTrafoB(bool enable)
     {
         m_ssrTrafoBEnabled = enable;
-        digitalWrite(PIN_RELAY_TRAFO_UNTEN_CUT, enable ? HIGH : LOW);
+        digitalWrite(PIN_RELAY_TRAFO_UNTEN_CUT, enable ? LOW : HIGH);
     }
 
     bool isSsrTrafoA() const { return m_ssrTrafoAEnabled; }
@@ -114,8 +114,9 @@ private:
     static inline void initRelayPinLowActive(uint8_t pin) {
         // atomic nicht zwingend nötig, aber verhindert RMW-Kollisionen falls später ISR/Parallelzugriffe dazu kommen
         ATOMIC_BLOCK(ATOMIC_RESTORESTATE) {
-            pinMode(pin, OUTPUT);
+            // Glitch-sicher: zuerst Portwert setzen, dann OUTPUT aktivieren.
             digitalWrite(pin, HIGH); // default OFF (low-active)
+            pinMode(pin, OUTPUT);
         }
     }
 
