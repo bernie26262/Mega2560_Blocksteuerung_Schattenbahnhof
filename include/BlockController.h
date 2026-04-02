@@ -21,19 +21,13 @@ public:
     // Einfahrt in Block erlaubt? (hilft dem SBHF)
     bool canEnter(uint8_t fromBlock, uint8_t toBlock) const;
 
-    // Entry-Request/Grant (Merge-Logik). Aktuell genutzt für Block 4 (Einfahrt aus 3 oder 6).
-    void requestEnter(uint8_t fromBlock, uint8_t toBlock);
-    void cancelEnter(uint8_t fromBlock, uint8_t toBlock);
     bool entryGranted(uint8_t fromBlock, uint8_t toBlock) const;
     bool entryBlocked(uint8_t toBlock) const;
 
-
     // --------------------------------------------------------
-    // Entry-Request/Grant State (derzeit nur Block4 Merge)
+    // Grant-State für Block 4 (Einfahrt aus 3 oder 6)
     // --------------------------------------------------------
     void updateGrantBlock4(uint32_t nowMs);
-    uint32_t m_reqB4_from3_ms = 0;
-    uint32_t m_reqB4_from6_ms = 0;
     uint8_t  m_grantTo4_from  = 0; // 0=none, 3 or 6
     uint32_t m_grantTo4_ms    = 0;
 #if MEGA2_DEBUG

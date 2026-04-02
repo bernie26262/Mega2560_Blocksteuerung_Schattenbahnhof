@@ -16,9 +16,7 @@ static inline void logBgrantRateLimited(uint32_t nowMs,
                                         bool granted,
                                         bool free,
                                         bool occupied,
-                                        uint8_t grantTo4From,
-                                        uint32_t req3Ms,
-                                        uint32_t req6Ms)
+                                        uint8_t grantTo4From)
 {
     if ((uint32_t)(nowMs - s_lastBgrantLogMs) < 200u)
         return;
@@ -37,10 +35,6 @@ static inline void logBgrantRateLimited(uint32_t nowMs,
     Serial.print(occupied ? 1 : 0);
     Serial.print(F(" grant="));
     Serial.print(grantTo4From);
-    Serial.print(F(" req3="));
-    Serial.print(req3Ms);
-    Serial.print(F(" req6="));
-    Serial.println(req6Ms);
 }
 #endif
 
@@ -117,91 +111,65 @@ void BlockController::update(uint32_t nowMs)
 }
 
 // ------------------------------------------------------------
-// Entry-Request/Grant – Block 4 Merge (Einfahrt aus Block 3 oder 6)
+// Grant-Entscheidung – Block 4 Merge (Einfahrt aus Block 3 oder 6)
 // ------------------------------------------------------------
-static constexpr uint32_t ENTRY_REQ_TIMEOUT_MS = 1500;
-
 void BlockController::updateGrantBlock4(uint32_t nowMs)
 {
-    // Requests timeouten, wenn nicht periodisch erneuert
-    if (m_reqB4_from3_ms && (nowMs - m_reqB4_from3_ms) > ENTRY_REQ_TIMEOUT_MS) m_reqB4_from3_ms = 0;
-    if (m_reqB4_from6_ms && (nowMs - m_reqB4_from6_ms) > ENTRY_REQ_TIMEOUT_MS) m_reqB4_from6_ms = 0;
+    (void)nowMs;
 
-    // Wenn Block 4 belegt ist, kein Grant (und Requests sind weiterhin ok, weil man blocked erkennen kann)
-    if (isOccupied(4))
-    {
-        m_grantTo4_from = 0;
-        return;
-    }
-
-    const bool req3 = (m_reqB4_from3_ms != 0);
-    const bool req6 = (m_reqB4_from6_ms != 0);
-
-    if (!req3 && !req6)
-    {
-        m_grantTo4_from = 0;
-        return;
-    }
+    const bool occ3 = isOccupied(3);
+    const bool occ6 = isOccupied(6);
+    Block* b4 = m_blocks[4];
+    const bool free4 = b4 ? b4->isReallyFree(nowMs) : !isOccupied(4);
 
     // Zählregeln:
-    // - occ123: Anzahl belegter Blöcke 1..3
-    // - occUpper: Anzahl belegter Blöcke 5 + 6 + SBhf(7..9)
+    // - occ123   = Anzahl belegter Blöcke 1..3
+    // - occLower = Anzahl belegter Blöcke 5, SBHF1, SBHF2, SBHF3, 6
     uint8_t occ123 = 0;
     for (uint8_t b = 1; b <= 3 && b <= m_count; ++b)
         if (isOccupied(b)) occ123++;
 
-    uint8_t occUpper = 0;
+    uint8_t occLower = 0;
     for (uint8_t b = 5; b <= 9 && b <= m_count; ++b)
-        if (isOccupied(b)) occUpper++;
+        if (isOccupied(b)) occLower++;
 
-    // Regeln (wie besprochen):
-    // - From6->4 darf NUR wenn occ123 <= 2, und hat dann Vorfahrt vor From3->4.
-    // - From3->4 darf nur wenn occUpper <= 4.
-    // - Wenn occ123 > 2, wird From6->4 ohnehin nicht zugelassen => From3->4 hat dann (falls zulässig) Vorfahrt.
-    const bool ok6 = req6 && (occ123 <= 2);
-    const bool ok3 = req3 && (occUpper <= 4);
+    bool allow34 = false;
+    bool allow64 = false;
 
+    // Freigabe Block 3 -> 4:
+    // - wenn kein Zug in Block 6 ist
+    //   ODER
+    // - wenn mehr als 2 Züge in 1..3 sind
+    //   UND nicht mehr als 4 Züge in 5, SBHF1..3, 6 sind
+    if (occ3 && free4)
+    {
+        if (!occ6)
+        {
+            allow34 = true;
+        }
+        else if ((occ123 > 2) && (occLower <= 4))
+        {
+            allow34 = true;
+        }
+    }
+
+    // Freigabe Block 6 -> 4:
+    // - wenn nicht mehr als 2 Züge in 1..3 sind
+    if (occ6 && free4 && (occ123 <= 2))
+    {
+        allow64 = true;
+    }
+
+    // Vorfahrt:
+    // Wenn Block 3 und 6 beide belegt sind, hat Block 6 Vorfahrt.
     uint8_t grant = 0;
-
-    if (occ123 <= 2)
-    {
-        // Priority: From6->4
-        if (ok6)      grant = 6;
-        else if (ok3) grant = 3;
-    }
-    else
-    {
-        // Priority: From3->4
-        if (ok3)      grant = 3;
-        else if (ok6) grant = 6; // ok6 ist hier i.d.R. false, aber der Code bleibt robust
-    }
+    if (allow64)      grant = 6;
+    else if (allow34) grant = 3;
 
     if (grant != m_grantTo4_from)
     {
         m_grantTo4_from = grant;
         m_grantTo4_ms   = nowMs;
-    }
-}
-
-void BlockController::requestEnter(uint8_t fromBlock, uint8_t toBlock)
-{
-    const uint32_t now = millis();
-
-    if (toBlock == 4)
-    {
-        if (fromBlock == 3) m_reqB4_from3_ms = now;
-        if (fromBlock == 6) m_reqB4_from6_ms = now;
-        updateGrantBlock4(now);
-    }
-}
-
-void BlockController::cancelEnter(uint8_t fromBlock, uint8_t toBlock)
-{
-    if (toBlock == 4)
-    {
-        if (fromBlock == 3) m_reqB4_from3_ms = 0;
-        if (fromBlock == 6) m_reqB4_from6_ms = 0;
-        updateGrantBlock4(millis());
     }
 }
 
@@ -218,11 +186,7 @@ bool BlockController::entryBlocked(uint8_t toBlock) const
 {
     if (toBlock == 4)
     {
-        // "blocked" == Block ist belegt UND es gibt einen gültigen Entry-Request
-        const uint32_t now = millis();
-        const bool req3 = m_reqB4_from3_ms && ((now - m_reqB4_from3_ms) <= ENTRY_REQ_TIMEOUT_MS);
-        const bool req6 = m_reqB4_from6_ms && ((now - m_reqB4_from6_ms) <= ENTRY_REQ_TIMEOUT_MS);
-        return isOccupied(4) && (req3 || req6);
+        return isOccupied(4) && (isOccupied(3) || isOccupied(6));
     }
     return false;
 }
@@ -238,8 +202,12 @@ uint16_t BlockController::stromFiltered(uint8_t id) const
     {
         if (!m_dbgStrom[id])
             return 0;
+#if MEGA2_SIM_MODE
         return m_dbgStromShort[id] ? DBG_SIM_CURRENT_SHORT_MA
                                    : DBG_SIM_CURRENT_NOMINAL_MA;
+#else
+        return 0;
+#endif
     }
 #endif
 
@@ -296,9 +264,7 @@ bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
                                  false,
                                  false,
                                  isOccupied(4),
-                                 m_grantTo4_from,
-                                 m_reqB4_from3_ms,
-                                 m_reqB4_from6_ms);
+                                 m_grantTo4_from);
 #endif
             return false;
         }
@@ -332,9 +298,7 @@ bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
                          true,
                          free,
                          occ,
-                         m_grantTo4_from,
-                         m_reqB4_from3_ms,
-                         m_reqB4_from6_ms);
+                         m_grantTo4_from);
 #endif
 
     return free;

@@ -644,8 +644,8 @@ static void logBrelayChange(uint32_t now,
 
 static void updateBlockGrantRelays()
 {
-    // Boot-/Safety-/DIAG-sicher: nur im normalen Fahrbetrieb freigeben.
-    const bool allow = g_power.isMainPowerOn() && !mega2IsDiagTest();
+    // Automatische Freigaberelais nur außerhalb von DIAG_TEST setzen.
+    const bool allow = !mega2IsDiagTest();
 
     const bool want12 = allow ? g_bc.canEnter(1, 2) : false;
     const bool want23 = allow ? g_bc.canEnter(2, 3) : false;
@@ -654,23 +654,18 @@ static void updateBlockGrantRelays()
     const bool want45 = allow ? g_bc.canEnter(4, 5) : false;
     const bool want64 = allow ? g_bc.canEnter(6, 4) : false;
 
+    // In DIAG_TEST die Relais NICHT aktiv zurücksetzen, damit diag.htm
+    // die Pins 43..47 und 53 manuell schalten kann.
     if (!allow)
     {
-        g_power.setBlock1To2(false);
-        g_power.setBlock2To3(false);
-        g_power.setBlock3To4(false);
-        g_power.setBlock4To1(false);
-        g_power.setBlock4To5(false);
-        g_power.setBlock6To4(false);
-        
 #if MEGA2_DEBUG_BLOCK_RELAYS
         const uint32_t now = millis();
-        logBrelayChange(now, F("1->2"), PIN_RELAY_BLOCK1_NACH2, allow, false);
-        logBrelayChange(now, F("2->3"), PIN_RELAY_BLOCK2_NACH3, allow, false);
-        logBrelayChange(now, F("3->4"), PIN_RELAY_BLOCK3_NACH4, allow, false);
-        logBrelayChange(now, F("4->1"), PIN_RELAY_BLOCK4_NACH1, allow, false);
-        logBrelayChange(now, F("4->5"), PIN_RELAY_BLOCK4_NACH5, allow, false);
-        logBrelayChange(now, F("6->4"), PIN_RELAY_BLOCK6_NACH4, allow, false);
+        logBrelayChange(now, F("1->2"), PIN_RELAY_BLOCK1_NACH2, allow, (digitalRead(PIN_RELAY_BLOCK1_NACH2) == LOW));
+        logBrelayChange(now, F("2->3"), PIN_RELAY_BLOCK2_NACH3, allow, (digitalRead(PIN_RELAY_BLOCK2_NACH3) == LOW));
+        logBrelayChange(now, F("3->4"), PIN_RELAY_BLOCK3_NACH4, allow, (digitalRead(PIN_RELAY_BLOCK3_NACH4) == LOW));
+        logBrelayChange(now, F("4->1"), PIN_RELAY_BLOCK4_NACH1, allow, (digitalRead(PIN_RELAY_BLOCK4_NACH1) == LOW));
+        logBrelayChange(now, F("4->5"), PIN_RELAY_BLOCK4_NACH5, allow, (digitalRead(PIN_RELAY_BLOCK4_NACH5) == LOW));
+        logBrelayChange(now, F("6->4"), PIN_RELAY_BLOCK6_NACH4, allow, (digitalRead(PIN_RELAY_BLOCK6_NACH4) == LOW));
 #endif
         return;
     }
@@ -1081,6 +1076,25 @@ void loop()
 #endif
     }
 
+    // Kontakt-Eingänge zyklisch entprellen/aktualisieren.
+    // Wichtig: g_bc.update(now) liest in Block::updateContact() nur
+    // SensorKontakt::isOccupied(), also den gespeicherten entprellten Zustand.
+    // diag.htm liest dagegen teils raw(). Daher müssen die Kontakte hier
+    // vor dem BlockController-Update zyklisch nachgeführt werden.
+    k_block1.update(now);
+    k_block2.update(now);
+    k_block3.update(now);
+    k_block4.update(now);
+    k_block5.update(now);
+    k_block6.update(now);
+    k_sbhf1.update(now);
+    k_sbhf2.update(now);
+    k_sbhf3.update(now);
+    k_nothalt.update(now);
+    k_bhf2a.update(now);
+    k_bhf2b.update(now);
+    k_bhf4a.update(now);
+    k_bhf4b.update(now);
 
     // ------------------------------------------------------------
     // AUTOMATIK-PFADE
@@ -1101,11 +1115,6 @@ void loop()
             g_sbhf.update(now);
             updateBlockGrantRelays();
         }
-    }
-    else
-    {
-        // In DIAG_TEST keine Automatik-Freigaberelais aktiv halten.
-        updateBlockGrantRelays();
     }
 
     if (now - lastWeichenUpdate >= WEICHEN_UPDATE_MS)
