@@ -7,6 +7,10 @@
 #include "mega2_debug.h"
 #include "safety_error.h"
 
+#ifndef MEGA2_DEBUG_SBHF_S15
+#define MEGA2_DEBUG_SBHF_S15 0
+#endif
+
 // ============================================================
 // Externe Objekte
 // ============================================================
@@ -25,6 +29,22 @@ static constexpr uint32_t WEICHE_MIN_CHECK_MS = 500;   // frühester Ist-Check
 static constexpr uint32_t WEICHE_TIMEOUT_MS   = 2500;  // Hard-Error
 
 // ============================================================
+
+static const __FlashStringHelper* sbhfStateToStr(SBhfState s)
+#if MEGA2_DEBUG_SBHF_S15
+{
+    switch (s)
+    {
+        case SBhfState::Idle:           return F("Idle");
+        case SBhfState::PrepareExit:    return F("PrepareExit");
+        case SBhfState::SettingWeichen: return F("SettingWeichen");
+        case SBhfState::WaitBlock6:     return F("WaitBlock6");
+        case SBhfState::ExitRunning:    return F("ExitRunning");
+        case SBhfState::Error:          return F("Error");
+        default:                        return F("?");
+    }
+}
+#endif
 
 ShadowYardController::ShadowYardController(BlockController* bc)
 : m_bc(bc),
@@ -176,28 +196,82 @@ void ShadowYardController::onS14()
 
 void ShadowYardController::onS15()
 {
+#if MEGA2_DEBUG_SBHF_S15
+    Serial.print(F("[S15DBG] onS15 enter state="));
+    Serial.print(sbhfStateToStr(m_state));
+    Serial.print(F(" errorActive="));
+    Serial.print(m_errorActive ? 1 : 0);
+    Serial.print(F(" selftestActive="));
+    Serial.print(m_selftestActive ? 1 : 0);
+    Serial.print(F(" safetyLock="));
+    Serial.print(safetyIsLocked() ? 1 : 0);
+    Serial.print(F(" emergency="));
+    Serial.print(safetyIsEmergencyActive() ? 1 : 0);
+    Serial.print(F(" nothaltBefore="));
+    Serial.print(g_power.isNothaltActive() ? 1 : 0);
+    Serial.print(F(" pin52Before="));
+    Serial.println(digitalRead(PIN_RELAY_NOTHALT) == LOW ? 0 : 1);
+#endif
+
     if (m_state == SBhfState::Error)
     {
         DBG_PRINTLN(F("[SBHF] S15 ignored (ERROR-LOCK)"));
+#if MEGA2_DEBUG_SBHF_S15
+        Serial.println(F("[S15DBG] ignored because state=Error"));
+#endif
         return;
     }
 
-    // S15: Nothaltgleis EIN (Freigabe)
-    g_power.setNothalt(false);
-    DBG_PRINTLN(F("[SBHF] S15 -> Nothalt frei (Gleis EIN)"));
+    // S15: Nothalt-Powerpfad AN
+    g_power.setNothalt(true);
+    DBG_PRINTLN(F("[SBHF] S15 -> Nothalt aktiv (Powerpfad AN)"));
+
+#if MEGA2_DEBUG_SBHF_S15
+    Serial.print(F("[S15DBG] onS15 done nothaltAfter="));
+    Serial.print(g_power.isNothaltActive() ? 1 : 0);
+    Serial.print(F(" pin52After="));
+    Serial.println(digitalRead(PIN_RELAY_NOTHALT) == LOW ? 0 : 1);
+#endif
 }
 
 void ShadowYardController::onS16()
 {
+#if MEGA2_DEBUG_SBHF_S15
+    Serial.print(F("[S16DBG] onS16 enter state="));
+    Serial.print(sbhfStateToStr(m_state));
+    Serial.print(F(" errorActive="));
+    Serial.print(m_errorActive ? 1 : 0);
+    Serial.print(F(" selftestActive="));
+    Serial.print(m_selftestActive ? 1 : 0);
+    Serial.print(F(" safetyLock="));
+    Serial.print(safetyIsLocked() ? 1 : 0);
+    Serial.print(F(" emergency="));
+    Serial.print(safetyIsEmergencyActive() ? 1 : 0);
+    Serial.print(F(" nothaltBefore="));
+    Serial.print(g_power.isNothaltActive() ? 1 : 0);
+    Serial.print(F(" pin52Before="));
+    Serial.println(digitalRead(PIN_RELAY_NOTHALT) == LOW ? 0 : 1);
+#endif
+
     if (m_state == SBhfState::Error)
     {
         DBG_PRINTLN(F("[SBHF] S16 ignored (ERROR-LOCK)"));
+#if MEGA2_DEBUG_SBHF_S15
+        Serial.println(F("[S16DBG] ignored because state=Error"));
+#endif 
         return;
     }
 
-    // S16: Nothaltgleis AUS (Stopzone scharf)
-    g_power.setNothalt(true);
-    DBG_PRINTLN(F("[SBHF] S16 -> Nothalt aktiv (Gleis AUS)"));
+    // S16: Nothalt-Powerpfad AUS
+    g_power.setNothalt(false);
+    DBG_PRINTLN(F("[SBHF] S16 -> Nothalt frei (Powerpfad AUS)"));
+
+#if MEGA2_DEBUG_SBHF_S15
+    Serial.print(F("[S16DBG] onS16 done nothaltAfter="));
+    Serial.print(g_power.isNothaltActive() ? 1 : 0);
+    Serial.print(F(" pin52After="));
+    Serial.println(digitalRead(PIN_RELAY_NOTHALT) == LOW ? 0 : 1);
+#endif
 
     // KEIN Hard-Error hier!
 }

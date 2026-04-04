@@ -519,8 +519,10 @@ void safetyUpdate()
     // ------------------------------------------------------------
     if (!s_emergencyActive)
     {
-        // Wie vereinbart: "Stopzone aktiv" == Nothaltgleis AUS == isNothaltActive()==true
-        const bool stopzoneActive    = g_power.isNothaltActive();
+        // Stopzone aktiv / scharf nur dann, wenn das Nothaltgleis AUS ist.
+        // Nach der korrigierten S15/S16-Semantik bedeutet das:
+        // isNothaltActive()==false  -> Stopzone scharf
+        const bool stopzoneActive    = !g_power.isNothaltActive();
         const bool trafoUntenPowered = isTrafoUntenPowered();
         const bool nothaltKontaktOcc = k_nothalt.raw();
 

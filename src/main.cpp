@@ -69,6 +69,10 @@
 #define MEGA2_DEBUG_BLOCK_RELAYS 0
 #endif
 
+#ifndef MEGA2_DEBUG_SBHF_S15
+#define MEGA2_DEBUG_SBHF_S15 0
+#endif
+
 // ============================================================================
 // GLOBALE OBJEKTE
 // ============================================================================
@@ -243,6 +247,25 @@ PulseSensor g_s16(PIN_SCHALTGLEIS_S16);
 class ShadowYardController;
 extern ShadowYardController g_sbhf;
 
+#if MEGA2_DEBUG_SBHF_S15
+extern Mega2PowerControl g_power;
+
+
+static const __FlashStringHelper* sbhfStateToStr(SBhfState s)
+{
+    switch (s)
+    {
+        case SBhfState::Idle:           return F("Idle");
+        case SBhfState::PrepareExit:    return F("PrepareExit");
+        case SBhfState::SettingWeichen: return F("SettingWeichen");
+        case SBhfState::WaitBlock6:     return F("WaitBlock6");
+        case SBhfState::ExitRunning:    return F("ExitRunning");
+        case SBhfState::Error:          return F("Error");
+        default:                        return F("?");
+    }
+}
+#endif
+
 // --------------------- SCHALTGLEISE -> SBHF DISPATCH -------------------------
 static void sbhfHandleSchaltgleise()
 {
@@ -256,8 +279,82 @@ static void sbhfHandleSchaltgleise()
     if (g_s12.fellEdge()) { DBG_PRINTLN(F("[SBHF] S12 pulse")); if (dispatch) g_sbhf.onS12(); }
     if (g_s13.fellEdge()) { DBG_PRINTLN(F("[SBHF] S13 pulse")); if (dispatch) g_sbhf.onS13(); }
     if (g_s14.fellEdge()) { DBG_PRINTLN(F("[SBHF] S14 pulse")); if (dispatch) g_sbhf.onS14(); }
-    if (g_s15.fellEdge()) { DBG_PRINTLN(F("[SBHF] S15 pulse")); if (dispatch) g_sbhf.onS15(); }
-    if (g_s16.fellEdge()) { DBG_PRINTLN(F("[SBHF] S16 pulse")); if (dispatch) g_sbhf.onS16(); }
+
+    if (g_s15.fellEdge())
+    {
+#if MEGA2_DEBUG_SBHF_S15
+        Serial.print(F("[S15DBG] pulse dispatch="));
+        Serial.print(dispatch ? 1 : 0);
+        Serial.print(F(" diag="));
+        Serial.print(mega2IsDiagTest() ? 1 : 0);
+        Serial.print(F(" safetyBlocked="));
+        Serial.print(g_sbhf.isSafetyBlocked() ? 1 : 0);
+        Serial.print(F(" state="));
+        Serial.print(sbhfStateToStr(g_sbhf.state()));
+        Serial.print(F(" nothaltBefore="));
+        Serial.print(g_power.isNothaltActive() ? 1 : 0);
+        Serial.print(F(" pin52Before="));
+        Serial.println(digitalRead(PIN_RELAY_NOTHALT) == LOW ? 0 : 1);
+#endif
+
+        if (dispatch)
+        {
+            g_sbhf.onS15();
+
+#if MEGA2_DEBUG_SBHF_S15
+            Serial.print(F("[S15DBG] after dispatch state="));
+            Serial.print(sbhfStateToStr(g_sbhf.state()));
+            Serial.print(F(" nothaltAfter="));
+            Serial.print(g_power.isNothaltActive() ? 1 : 0);
+            Serial.print(F(" pin52After="));
+            Serial.println(digitalRead(PIN_RELAY_NOTHALT) == LOW ? 0 : 1);
+#endif
+        }
+#if MEGA2_DEBUG_SBHF_S15
+        else
+        {
+            Serial.println(F("[S15DBG] dispatch suppressed"));
+        }
+#endif
+    }
+
+    if (g_s16.fellEdge())
+    {
+#if MEGA2_DEBUG_SBHF_S15
+        Serial.print(F("[S16DBG] pulse dispatch="));
+        Serial.print(dispatch ? 1 : 0);
+        Serial.print(F(" diag="));
+        Serial.print(mega2IsDiagTest() ? 1 : 0);
+        Serial.print(F(" safetyBlocked="));
+        Serial.print(g_sbhf.isSafetyBlocked() ? 1 : 0);
+        Serial.print(F(" state="));
+        Serial.print(sbhfStateToStr(g_sbhf.state()));
+        Serial.print(F(" nothaltBefore="));
+        Serial.print(g_power.isNothaltActive() ? 1 : 0);
+        Serial.print(F(" pin52Before="));
+        Serial.println(digitalRead(PIN_RELAY_NOTHALT) == LOW ? 0 : 1);
+#endif
+
+        if (dispatch)
+        {
+            g_sbhf.onS16();
+
+#if MEGA2_DEBUG_SBHF_S15
+            Serial.print(F("[S16DBG] after dispatch state="));
+            Serial.print(sbhfStateToStr(g_sbhf.state()));
+            Serial.print(F(" nothaltAfter="));
+            Serial.print(g_power.isNothaltActive() ? 1 : 0);
+            Serial.print(F(" pin52After="));
+            Serial.println(digitalRead(PIN_RELAY_NOTHALT) == LOW ? 0 : 1);
+#endif
+        }
+#if MEGA2_DEBUG_SBHF_S15
+        else
+        {
+            Serial.println(F("[S16DBG] dispatch suppressed"));
+        }
+#endif
+    }
 }
 
 
@@ -703,7 +800,7 @@ void setup()
     g_bootId = makeBootId16();
 
     DBG_BEGIN(115200);
-#if MEGA2_DEBUG_TRAFO_RAW || MEGA2_DEBUG_STROM_BLOCKS || MEGA2_DEBUG_BLOCK_OCC || MEGA2_DEBUG_BLOCK_GRANT || MEGA2_DEBUG_BLOCK_RELAYS
+#if MEGA2_DEBUG_TRAFO_RAW || MEGA2_DEBUG_STROM_BLOCKS || MEGA2_DEBUG_BLOCK_OCC || MEGA2_DEBUG_BLOCK_GRANT || MEGA2_DEBUG_BLOCK_RELAYS || MEGA2_DEBUG_SBHF_S15
     Serial.begin(115200);
 #endif
 
