@@ -58,6 +58,7 @@ ShadowYardController::ShadowYardController(BlockController* bc)
   m_phaseStartMs(0),
   m_errorActive(false),
   m_exitPowerOn(false),
+  m_readyRouteOnly(false),
   m_resumePending(false),
   m_resumeGleis(0),
   m_resumeState(SBhfState::Idle)
@@ -344,6 +345,46 @@ void ShadowYardController::update(uint32_t nowMs)
 // Gleiswahl
 // ============================================================
 
+uint8_t ShadowYardController::peekNextGleis() const
+{
+    if (m_allowedMask == 0)
+        return 0; // kein sicherer Pfad ableitbar
+
+    auto isAllowed = [&](uint8_t g) -> bool
+    {
+        if (g < 1 || g > 3) return false;
+        return (m_allowedMask & (1 << (g - 1))) != 0;
+    };
+
+    if (m_mode == SbhfMode::Sequential)
+    {
+        uint8_t g = m_nextGleis;
+        if (g < 1 || g > 3) g = 1;
+
+        // Bevorzugt das aktuell vorgesehene nächste Gleis, ohne Rotation.
+        if (isAllowed(g))
+            return g;
+
+        // Fallback: ab m_nextGleis zyklisch das nächste erlaubte suchen,
+        // aber ohne m_nextGleis zu verändern.
+        for (uint8_t tries = 0; tries < 3; tries++)
+        {
+            uint8_t cand = ((g - 1 + tries) % 3) + 1;
+            if (isAllowed(cand))
+                return cand;
+        }
+
+        return 0;
+    }
+
+    // Random-Modus:
+    // Es gibt kein persistent "vorgesehenes" nächstes Gleis.
+    // Daher liefern wir eine zulässige Auswahl analog zur normalen Random-Logik,
+    // aber ohne Seiteneffekt auf Sequenz-Zustand.
+    return const_cast<ShadowYardController*>(this)->pickRandomGleisNoRepeat(m_currentGleis);
+}
+
+
 uint8_t ShadowYardController::pickNextGleis()
 {
     if (m_allowedMask == 0)
@@ -448,6 +489,48 @@ void ShadowYardController::buildWeichenPlan(uint8_t gleis)
     }
 }
 
+void ShadowYardController::onAutomationResumed(uint32_t nowMs)
+{
+    if (m_state != SBhfState::Idle)
+    {
+        DBG_PRINTF("[SBHF] Auto resume: ready route skipped (state=%u)\n", (unsigned)m_state);
+        return;
+    }
+    if (m_errorActive || m_selftestActive || safetyIsLocked() || safetyIsEmergencyActive())
+    {
+        DBG_PRINTF("[SBHF] Auto resume: ready route skipped (err=%u st=%u lock=%u emg=%u)\n",
+                   (unsigned)(m_errorActive ? 1 : 0),
+                   (unsigned)(m_selftestActive ? 1 : 0),
+                   (unsigned)(safetyIsLocked() ? 1 : 0),
+                   (unsigned)(safetyIsEmergencyActive() ? 1 : 0));
+        return;
+    }
+    applyReadyRouteForNextGleis(nowMs);
+}
+
+void ShadowYardController::applyReadyRouteForNextGleis(uint32_t nowMs)
+{
+    if (m_state != SBhfState::Idle)
+    {
+        DBG_PRINTF("[SBHF] Ready route skipped: not idle (state=%u)\n", (unsigned)m_state);
+        return;
+    }
+
+    const uint8_t gleis = peekNextGleis();
+    if (gleis < 1 || gleis > 3)
+    {
+        DBG_PRINTLN(F("[SBHF] Ready route skipped: no allowed next gleis"));
+        return;
+    }
+
+    buildWeichenPlan(gleis);
+    m_readyRouteOnly = true;
+    startWeichenSequence(nowMs);
+    m_state = SBhfState::SettingWeichen;
+
+    DBG_PRINTF("[SBHF] Ready route (SEQUENTIAL) started for Gleis %u\n", (unsigned)gleis);
+}
+
 void ShadowYardController::startWeichenSequence(uint32_t nowMs)
 {
     m_weichenIndex = 0;
@@ -459,7 +542,16 @@ void ShadowYardController::processWeichenSequence(uint32_t nowMs)
 {
     if (m_weichenIndex >= m_weichenCount)
     {
-        m_state = SBhfState::WaitBlock6;
+        if (m_readyRouteOnly)
+        {
+            m_readyRouteOnly = false;
+            m_state = SBhfState::Idle;
+            DBG_PRINTLN(F("[SBHF] Ready route sequence complete -> IDLE"));
+        }
+        else
+        {
+            m_state = SBhfState::WaitBlock6;
+        }
         return;
     }
 
@@ -1136,6 +1228,9 @@ void ShadowYardController::selftestFinish()
 
     if (m_allowedMask != 0x07 && m_allowedMask != 0x00)
         m_warningMask |= SBHF_WARN_RESTRICTED;
+
+    // Nach dem Selbsttest die Bereitschaftslage für das nächste vorgesehene SBHF-Gleis herstellen.
+    applyReadyRouteForNextGleis(millis());
 
     m_selftestActive = false;
     m_selftestDone   = true;

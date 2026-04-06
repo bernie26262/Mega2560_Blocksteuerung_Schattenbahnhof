@@ -92,6 +92,10 @@ bool isSelftestActive() const { return m_selftestActive; }
 bool isSelftestDone()   const { return m_selftestDone; }
 void clearSelftestDone() { m_selftestDone = false; }
 
+    // Wird aufgerufen, wenn Mega2 nach DIAG_TEST wieder in die Automatik geht.
+    // Stellt im unkritischen Fall die Bereitschaftsroute für das nächste Gleis her.
+    void onAutomationResumed(uint32_t nowMs);
+
     // Gate für Sensor-Dispatch (S11..S16):
     // true => keine Sensor-Events in die SBhf-Logik einspeisen (SafetyLock / Error / Selftest)
     bool isSafetyBlocked() const;
@@ -165,7 +169,10 @@ bool startSelftestImpl(bool includeNonCritical, bool allowFromCleanIdle, bool al
     // Reset-Guard für Safety/ACK: nur wenn SBHF in Error ist, Nothalt aus und keine aktive Ausfahrt
     bool canReset() const;
 private:
+    void applyReadyRouteForNextGleis(uint32_t nowMs);
+
     // ---------------- Gleiswahl ----------------
+    uint8_t peekNextGleis() const;
     uint8_t pickNextGleis();
     uint8_t pickRandomGleisNoRepeat(uint8_t last);
 
@@ -201,6 +208,10 @@ private:
     // Flags
     bool m_errorActive;
     bool m_exitPowerOn;
+
+    // true => Weichensequenz nur für Bereitschaftsroute,
+    // danach zurück nach Idle und KEINE Ausfahrt starten
+    bool m_readyRouteOnly;
 
     // --------------------------------------------------------
     // Resume-Checkpoint (damit nach NOTAUS/ACK kein erneutes S11 nötig ist)

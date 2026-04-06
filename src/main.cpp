@@ -384,6 +384,8 @@ SystemStatus g_systemStatus;
 static uint32_t lastBlockUpdate = 0;
 static uint32_t lastSbhfUpdate = 0;
 static uint32_t lastWeichenUpdate = 0;
+static bool prevDiagTest = false;
+
 static uint32_t lastStromUpdate  = 0;
 static uint32_t lastPayloadUpdate = 0;
 
@@ -1198,7 +1200,15 @@ void loop()
     // In DIAG_TEST werden die Automatik-Schaltpfade pausiert.
     // Safety bleibt aktiv und kann weiterhin Relais hart abschalten.
     // ------------------------------------------------------------
-    if (!mega2IsDiagTest())
+    const bool diagNow = mega2IsDiagTest();
+    if (prevDiagTest && !diagNow)
+    {
+        DBG_PRINTLN(F("[SBHF] RunMode DIAG->AUTO: restore ready route"));
+        g_sbhf.onAutomationResumed(now);
+    }
+    prevDiagTest = diagNow;
+
+    if (!diagNow)
     {
         if (now - lastBlockUpdate >= BLOCK_UPDATE_MS)
         {
