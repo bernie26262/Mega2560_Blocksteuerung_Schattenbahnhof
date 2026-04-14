@@ -48,7 +48,10 @@ struct __attribute__((packed)) SystemStatus
     uint8_t  sbhfOccupiedMask;
 
     uint8_t  sbhfCurrentGleis; // 0=none, 1..3
-    uint8_t  _pad0;
+    uint8_t  sbhfFlags;
+    // sbhfFlags bits:
+    // bit0 = block5ToSbhfActive
+    // other bits reserved
 
     uint16_t turnoutSollMask;  // Bit0=W12..Bit3=W15
     uint16_t turnoutIstMask;

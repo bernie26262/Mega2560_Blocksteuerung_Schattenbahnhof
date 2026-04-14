@@ -10,10 +10,12 @@ class Weiche;
 // ============================================================
 enum class SBhfState : uint8_t {
     Idle = 0,
-    PrepareExit,
+    PrepareCycle,
     SettingWeichen,
     WaitBlock6,
     ExitRunning,
+    WaitEntryAfterExitFree,
+    EntryRunning,
     Error
 };
 
@@ -171,6 +173,16 @@ bool startSelftestImpl(bool includeNonCritical, bool allowFromCleanIdle, bool al
 private:
     void applyReadyRouteForNextGleis(uint32_t nowMs);
 
+    // ---------------- Einfahrpfad Block5 -> SBHF ----------
+    // Route-/Plausibilitätsableitung aus W12/W13-IST bleibt für Schutzprüfungen erhalten.
+    uint8_t determineInboundTargetGleisFromIst() const;
+    bool    isEntryTargetContactOccupied(uint8_t gleis) const;
+    bool    isInboundTargetOccupied(uint8_t gleis) const;
+    void    updateBlock5ToSbhfPower(uint32_t nowMs);
+    uint8_t currentSbhfBlockId() const;
+    bool    isCurrentExitGleisOccupied() const;
+    void    triggerRouteError(uint8_t idx, const __FlashStringHelper* reason);
+
     // ---------------- Gleiswahl ----------------
     uint8_t peekNextGleis() const;
     uint8_t pickNextGleis();
@@ -204,6 +216,16 @@ private:
     enum class WPhase : uint8_t { Idle, Impuls, Check };
     WPhase   m_wphase;
     uint32_t m_phaseStartMs;
+
+    // Ausfahrpfad aktives SBHF-Gleis -> Block 6
+    uint32_t m_exitStartMs;
+
+    // Gesamtzyklus / Einfahrt
+    bool     m_cycleNeedsExitFirst;
+    uint32_t m_targetFreeSinceMs;
+
+    // Exit-Überwachung
+    bool     m_exitWasOccupiedAtStart;
 
     // Flags
     bool m_errorActive;

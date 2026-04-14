@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include "BlockController.h"
+#include "Mega2PowerControl.h"
 #include "ShadowYardController.h"
 #include "Weiche.h"
 #include "safety.h"
@@ -18,6 +19,7 @@ extern Weiche w12;
 extern Weiche w13;
 extern Weiche w14;
 extern Weiche w15;
+extern Mega2PowerControl g_power;
 
 // g_bootId: weak definition, damit der Linker auch dann zufrieden ist,
 // wenn (noch) keine andere starke Definition existiert.
@@ -172,6 +174,10 @@ void buildMega2SystemStatus(SystemStatus& out)
 
     // aktuelles (ausgewähltes) Gleis 1..3 (0 = none)
     out.sbhfCurrentGleis = g_sbhf.ausfahrGleis();
+    out.sbhfFlags = 0;
+
+    if (g_power.isBlock5ToSBhfActive())
+        out.sbhfFlags |= 0x01;
 
     // Weichen Soll/Ist
     out.turnoutSollMask = buildTurnoutSollMask();

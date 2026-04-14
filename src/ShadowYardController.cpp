@@ -11,6 +11,25 @@
 #define MEGA2_DEBUG_SBHF_S15 0
 #endif
 
+#ifndef MEGA2_DEBUG_SBHF_SWITCHSEQ
+#define MEGA2_DEBUG_SBHF_SWITCHSEQ 0
+#endif
+
+#if MEGA2_DEBUG_SBHF_SWITCHSEQ
+static inline void sbhfSwitchSeqPrintf_(const char* fmt, ...)
+{
+    char buf[128];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    Serial.print(buf);
+}
+  #define SBHF_SWITCHSEQ_PRINTF(...) sbhfSwitchSeqPrintf_(__VA_ARGS__)
+#else
+  #define SBHF_SWITCHSEQ_PRINTF(...) do{}while(0)
+#endif
+
 // ============================================================
 // Externe Objekte
 // ============================================================
@@ -19,27 +38,36 @@ extern Weiche w13;
 extern Weiche w14;
 extern Weiche w15;
 
+extern SensorKontakt k_sbhf1;
+extern SensorKontakt k_sbhf2;
+extern SensorKontakt k_sbhf3;
+
 extern Mega2PowerControl g_power;
 
 // ------------------------------------------------------------
 // Weichen-Zeiten (D2)
 // ------------------------------------------------------------
 static constexpr uint32_t WEICHE_IMPULS_MS    = 500;   // Spulenimpuls
-static constexpr uint32_t WEICHE_MIN_CHECK_MS = 500;   // frühester Ist-Check
+static constexpr uint32_t WEICHE_MIN_CHECK_MS = 800;   // frühester Ist-Check
 static constexpr uint32_t WEICHE_TIMEOUT_MS   = 2500;  // Hard-Error
+static constexpr uint32_t BLOCK5_TO_SBHF_FREE_DELAY_MS = 1250;
+static constexpr uint32_t SBHF_EXIT_STILL_OCC_TIMEOUT_MS = 8000;
 
 // ============================================================
 
-static const __FlashStringHelper* sbhfStateToStr(SBhfState s)
+
 #if MEGA2_DEBUG_SBHF_S15
+static const __FlashStringHelper* sbhfStateToStr(SBhfState s)
 {
     switch (s)
     {
         case SBhfState::Idle:           return F("Idle");
-        case SBhfState::PrepareExit:    return F("PrepareExit");
+        case SBhfState::PrepareCycle:   return F("PrepareCycle");
         case SBhfState::SettingWeichen: return F("SettingWeichen");
         case SBhfState::WaitBlock6:     return F("WaitBlock6");
         case SBhfState::ExitRunning:    return F("ExitRunning");
+        case SBhfState::WaitEntryAfterExitFree: return F("WaitEntryAfterExitFree");
+        case SBhfState::EntryRunning:   return F("EntryRunning");
         case SBhfState::Error:          return F("Error");
         default:                        return F("?");
     }
@@ -56,6 +84,10 @@ ShadowYardController::ShadowYardController(BlockController* bc)
   m_weichenIndex(0),
   m_wphase(WPhase::Idle),
   m_phaseStartMs(0),
+  m_exitStartMs(0),
+  m_cycleNeedsExitFirst(false),
+  m_targetFreeSinceMs(0),
+  m_exitWasOccupiedAtStart(false),
   m_errorActive(false),
   m_exitPowerOn(false),
   m_readyRouteOnly(false),
@@ -85,6 +117,14 @@ void ShadowYardController::begin()
     m_weichenIndex = 0;
     m_wphase = WPhase::Idle;
     m_phaseStartMs = 0;
+
+    m_exitStartMs = 0;
+    m_cycleNeedsExitFirst = false;
+    m_targetFreeSinceMs = 0;
+    m_exitWasOccupiedAtStart = false;
+
+    // Boot-sicher: Einfahrpfad immer AUS, bis Route+Belegung stabil bewertet wurden
+    g_power.setBlock5ToSBhf(false);
 }
 
 // ============================================================
@@ -117,6 +157,128 @@ bool ShadowYardController::isSafetyBlocked() const
            safetyIsEmergencyActive();
 }
 
+uint8_t ShadowYardController::determineInboundTargetGleisFromIst() const
+{
+    // Fachliche Ableitung aus den IST-Rückmeldungen.
+    // Wird weiterhin für Plausibilitäts-/Schutzprüfungen verwendet:
+    // W12 Abzweig                      -> Gleis 1
+    // W12 Gerade + W13 Abzweig         -> Gleis 2
+    // W12 Gerade + W13 Gerade          -> Gleis 3
+    const bool w12Abzweig = w12.rueckmeldungAbbiegen();
+    const bool w13Abzweig = w13.rueckmeldungAbbiegen();
+
+    if (w12Abzweig)
+        return 1;
+
+    if (w13Abzweig)
+        return 2;
+
+    return 3;
+}
+
+bool ShadowYardController::isInboundTargetOccupied(uint8_t gleis) const
+{
+    if (!m_bc)
+        return false;
+
+    if (gleis < 1 || gleis > 3)
+        return false;
+
+    // SBHF1..3 entsprechen im Blockmodell 7..9
+    return m_bc->isOccupied(6 + gleis);
+}
+
+bool ShadowYardController::isEntryTargetContactOccupied(uint8_t gleis) const
+{
+    switch (gleis)
+    {
+        case 1:
+            return k_sbhf1.isOccupied();
+        case 2:
+            return k_sbhf2.isOccupied();
+        case 3:
+            return k_sbhf3.isOccupied();
+        default:
+            return false;
+    }
+}
+
+uint8_t ShadowYardController::currentSbhfBlockId() const
+{
+    if (m_currentGleis < 1 || m_currentGleis > 3)
+        return 0;
+
+    // SBHF1..3 entsprechen im Blockmodell 7..9
+    return static_cast<uint8_t>(6 + m_currentGleis);
+}
+
+bool ShadowYardController::isCurrentExitGleisOccupied() const
+{
+    if (!m_bc)
+        return false;
+
+    const uint8_t blockId = currentSbhfBlockId();
+    if (blockId == 0)
+        return false;
+
+    return m_bc->isOccupied(blockId);
+}
+
+void ShadowYardController::triggerRouteError(uint8_t idx, const __FlashStringHelper* reason)
+{
+    if (m_errorActive)
+        return;
+
+    // Falls ein Lauf bereits angefangen hatte, Resume-Checkpoint sichern.
+    if (m_state != SBhfState::Idle && m_state != SBhfState::Error && m_currentGleis != 0)
+    {
+        m_resumePending = true;
+        m_resumeGleis   = m_currentGleis;
+        m_resumeState   = SBhfState::PrepareCycle;
+    }
+
+    m_errorActive = true;
+    m_state = SBhfState::Error;
+    m_exitPowerOn = false;
+    m_exitStartMs = 0;
+    m_exitWasOccupiedAtStart = false;
+
+    // sichere Leistungslage
+    g_power.setBlock5ToSBhf(false);
+    g_power.setSbhfGleis(1, false);
+    g_power.setSbhfGleis(2, false);
+    g_power.setSbhfGleis(3, false);
+
+    DBG_PRINT(F("[SBHF] ROUTE ERROR: "));
+    DBG_PRINTLN(reason);
+
+    safetyErrorSet(SAFETY_ERR_SBH_ROUTE, idx);
+    safetySetEmergency(true);
+}
+
+void ShadowYardController::updateBlock5ToSbhfPower(uint32_t nowMs)
+{
+    (void)nowMs;
+
+    // Block5 -> SBHF ist künftig ausschließlich state-gesteuert.
+    // Nur während der expliziten Einfahrt darf dieser Powerpfad aktiv sein.
+    if (m_selftestActive ||
+        m_errorActive ||
+        safetyIsLocked() ||
+        safetyIsEmergencyActive())
+    {
+        g_power.setBlock5ToSBhf(false);
+        return;
+    }
+
+    if (m_state != SBhfState::EntryRunning)
+    {
+        g_power.setBlock5ToSBhf(false);
+        return;
+    }
+
+    g_power.setBlock5ToSBhf(true);
+}
 
 // ============================================================
 // Events
@@ -140,8 +302,10 @@ void ShadowYardController::onS11()
         return;
 
     m_currentGleis = pickNextGleis();
+    m_cycleNeedsExitFirst = isInboundTargetOccupied(m_currentGleis);
+    m_targetFreeSinceMs = 0;
     buildWeichenPlan(m_currentGleis);
-    m_state = SBhfState::PrepareExit;
+    m_state = SBhfState::PrepareCycle;
 }
 
 void ShadowYardController::onS12()
@@ -156,8 +320,10 @@ void ShadowYardController::onS12()
     {
         g_power.setSbhfGleis(1, false);
         m_exitPowerOn = false;
-
-        m_state = SBhfState::Idle;
+        m_exitStartMs = 0;
+        m_exitWasOccupiedAtStart = false;
+        m_targetFreeSinceMs = 0;
+        m_state = SBhfState::WaitEntryAfterExitFree;
     }
 }
 
@@ -173,8 +339,10 @@ void ShadowYardController::onS13()
     {
         g_power.setSbhfGleis(2, false);
         m_exitPowerOn = false;
-
-        m_state = SBhfState::Idle;
+        m_exitStartMs = 0;
+        m_exitWasOccupiedAtStart = false;
+        m_targetFreeSinceMs = 0;
+        m_state = SBhfState::WaitEntryAfterExitFree;
     }
 }
 
@@ -190,8 +358,10 @@ void ShadowYardController::onS14()
     {
         g_power.setSbhfGleis(3, false);
         m_exitPowerOn = false;
-
-        m_state = SBhfState::Idle;
+        m_exitStartMs = 0;
+        m_exitWasOccupiedAtStart = false;
+        m_targetFreeSinceMs = 0;
+        m_state = SBhfState::WaitEntryAfterExitFree;
     }
 }
 
@@ -294,6 +464,10 @@ void ShadowYardController::update(uint32_t nowMs)
     w14.update(nowMs);
     w15.update(nowMs);
 
+    // Block5 -> SBHF wird ausschließlich state-gesteuert geführt.
+    // Aktiv nur während EntryRunning.
+    updateBlock5ToSbhfPower(nowMs);
+
     if (m_selftestActive)
     {
         selftestUpdate(nowMs);
@@ -313,7 +487,7 @@ void ShadowYardController::update(uint32_t nowMs)
         case SBhfState::Idle:
             break;
 
-        case SBhfState::PrepareExit:
+        case SBhfState::PrepareCycle:
             startWeichenSequence(nowMs);
             m_state = SBhfState::SettingWeichen;
             break;
@@ -323,17 +497,98 @@ void ShadowYardController::update(uint32_t nowMs)
             break;
 
         case SBhfState::WaitBlock6:
-            if (!m_bc || !m_bc->canEnter(5, 6))
+        {
+            // Verbotener Zustand:
+            // Die aus W12/W13 abgeleitete Einfahrroute zeigt auf ein belegtes Zielgleis,
+            // aber Block5->SBHF wäre trotzdem elektrisch aktiv.
+            const uint8_t inboundTarget = determineInboundTargetGleisFromIst();
+            if (inboundTarget >= 1 && inboundTarget <= 3 &&
+                isInboundTargetOccupied(inboundTarget) &&
+                (digitalRead(PIN_RELAY_BLOCK5_NACH_SBH) == LOW))
+            {
+                triggerRouteError(inboundTarget, F("Block5->SBHF active while inbound target occupied"));
+                break;
+            }
+
+            // Fachlich korrekt: nicht pauschal 5->6,
+            // sondern aktives SBHF-Gleis -> Block 6
+            const uint8_t sbhfBlock = currentSbhfBlockId();
+            if (!m_bc || sbhfBlock == 0 || !m_bc->canEnter(sbhfBlock, 6))
                 break;
 
             g_power.setBlock5ToSBhf(false);
             g_power.setSbhfGleis(m_currentGleis, true);
 
             m_exitPowerOn = true;
+            m_exitStartMs = nowMs;
+            m_exitWasOccupiedAtStart = isCurrentExitGleisOccupied();
             m_state = SBhfState::ExitRunning;
             break;
+        }
 
         case SBhfState::ExitRunning:
+            // Harter Anlagenbezug:
+            // Wenn die Ausfahrt aktiv ist und das aktive SBHF-Gleis beim Start belegt war,
+            // muss diese Belegung innerhalb von 8 s verschwinden. Sonst Emergency.
+            if (m_exitPowerOn && m_exitWasOccupiedAtStart)
+            {
+                if (!isCurrentExitGleisOccupied())
+                {
+                    // Zug hat das SBHF-Gleis tatsächlich verlassen
+                    m_exitWasOccupiedAtStart = false;
+                    m_exitStartMs = 0;
+                }
+                else if (m_exitStartMs != 0 &&
+                         (nowMs - m_exitStartMs) >= SBHF_EXIT_STILL_OCC_TIMEOUT_MS)
+                {
+                    triggerRouteError(
+                        m_currentGleis,
+                        F("active SBHF exit still occupied after 8s")
+                    );
+                }
+            }
+            break;
+
+        case SBhfState::WaitEntryAfterExitFree:
+        {
+            if (m_currentGleis < 1 || m_currentGleis > 3)
+            {
+                g_power.setBlock5ToSBhf(false);
+                m_state = SBhfState::Idle;
+                break;
+            }
+
+            if (isInboundTargetOccupied(m_currentGleis))
+            {
+                m_targetFreeSinceMs = 0;
+                break;
+            }
+
+            if (m_targetFreeSinceMs == 0)
+            {
+                m_targetFreeSinceMs = nowMs;
+                break;
+            }
+
+            if ((nowMs - m_targetFreeSinceMs) >= BLOCK5_TO_SBHF_FREE_DELAY_MS)
+            {
+                m_state = SBhfState::EntryRunning;
+            }
+            break;
+        }
+
+        case SBhfState::EntryRunning:
+            // Ende der Einfahrt erst dann, wenn der zielgleisspezifische
+            // Kontakt GF1/GF2/GF3 tatsächlich erreicht wurde.
+            if (m_currentGleis >= 1 && m_currentGleis <= 3 &&
+                isEntryTargetContactOccupied(m_currentGleis))
+            {
+                g_power.setBlock5ToSBhf(false);
+                m_targetFreeSinceMs = 0;
+                m_cycleNeedsExitFirst = false;
+                m_currentGleis = 0;
+                m_state = SBhfState::Idle;
+            }
             break;
 
         case SBhfState::Error:
@@ -550,7 +805,15 @@ void ShadowYardController::processWeichenSequence(uint32_t nowMs)
         }
         else
         {
-            m_state = SBhfState::WaitBlock6;
+            if (m_cycleNeedsExitFirst)
+            {
+                m_state = SBhfState::WaitBlock6;
+            }
+            else
+            {
+                m_targetFreeSinceMs = 0;
+                m_state = SBhfState::WaitEntryAfterExitFree;
+            }
         }
         return;
     }
@@ -564,14 +827,27 @@ void ShadowYardController::processWeichenSequence(uint32_t nowMs)
         // 1) Impuls auslösen
         // --------------------------------------------------
         case WPhase::Idle:
-            if (sollAbzweig)
-                w->setAbzweig();
-            else
-                w->setGerade();
+        {
+            const bool started = w->schalte(
+                sollAbzweig ? Weiche::ABBIEGEN : Weiche::GERADE,
+                nowMs,
+                false
+            );
+
+            if (!started)
+            {
+                SBHF_SWITCHSEQ_PRINTF(
+                    "[SBHFSW] t=%lu W%u switch command delayed/rejected (busy/cooldown)\n",
+                    (unsigned long)nowMs,
+                    (unsigned)w->id()
+                );
+                return;
+            }
 
             m_wphase = WPhase::Impuls;
             m_phaseStartMs = nowMs;
             break;
+        }
 
         // --------------------------------------------------
         // 2) Impulsdauer abwarten
@@ -648,8 +924,8 @@ void ShadowYardController::triggerHardError(uint8_t weicheId)
     {
         m_resumePending = true;
         m_resumeGleis   = m_currentGleis;
-        // Safest Resume: Weichenplan neu aufbauen und Sequenz neu starten.
-        m_resumeState   = SBhfState::PrepareExit;
+        // Safest Resume: Zyklus neu ansetzen, Weichenplan neu aufbauen.
+        m_resumeState   = SBhfState::PrepareCycle;
     }
 
     m_errorActive = true;
@@ -689,6 +965,15 @@ void ShadowYardController::resetError()
     m_errorActive   = false;
     m_exitPowerOn   = false;
     m_currentGleis  = 0;
+
+    m_cycleNeedsExitFirst = false;
+    m_targetFreeSinceMs = 0;
+    m_exitStartMs = 0;
+    m_exitWasOccupiedAtStart = false;
+    g_power.setBlock5ToSBhf(false);
+    g_power.setSbhfGleis(1, false);
+    g_power.setSbhfGleis(2, false);
+    g_power.setSbhfGleis(3, false);
 
     m_weichenCount  = 0;
     m_weichenIndex  = 0;
@@ -732,6 +1017,8 @@ void ShadowYardController::onResetAck()
     if (resume)
     {
         m_currentGleis = gleis;
+        m_cycleNeedsExitFirst = isInboundTargetOccupied(m_currentGleis);
+        m_targetFreeSinceMs = 0;
         buildWeichenPlan(m_currentGleis);
         m_state = st;
 
@@ -893,7 +1180,7 @@ bool ShadowYardController::startSelftestRetry(bool includeNonCritical)
 void ShadowYardController::selftestUpdate(uint32_t nowMs)
 {
     static constexpr uint32_t SELFTEST_PULSE_MS  = 500; // wie gewünscht
-    static constexpr uint32_t SELFTEST_SETTLE_MS = 500; // wie gewünscht (1x Sample am Ende)
+    static constexpr uint32_t SELFTEST_SETTLE_MS = 800; // wie gewünscht (1x Sample am Ende)
 
     if (!m_stLoggedThisRun)
     {

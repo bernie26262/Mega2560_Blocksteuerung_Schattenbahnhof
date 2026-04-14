@@ -59,7 +59,12 @@ public:
     }
 
     void setBlock5ToSBhf(bool on) override {
+        m_block5ToSbhfActive = on;
         digitalWrite(PIN_RELAY_BLOCK5_NACH_SBH, on ? LOW : HIGH);
+    }
+
+    bool isBlock5ToSBhfActive() const override {
+        return m_block5ToSbhfActive;
     }
 
     void setSbhfGleis(uint8_t gleis, bool on) override {
@@ -122,6 +127,7 @@ private:
 
     bool m_nothaltActive = false;
     bool m_mainPowerOn = false;
+    bool m_block5ToSbhfActive = false;
     bool m_ssrTrafoAEnabled = false;
     bool m_ssrTrafoBEnabled = false;
 };

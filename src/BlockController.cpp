@@ -58,6 +58,24 @@ BlockController::BlockController(Block** blocks, uint8_t count)
 {
 }
 
+void BlockController::startGrantFreeze(uint32_t nowMs)
+{
+    const bool wasActive = isGrantFreezeActive(nowMs);
+    const uint32_t newUntil = nowMs + BlockController::GRANT_FREEZE_MS;
+
+    if (!wasActive)
+    {
+        Serial.print(F("[BLK] freeze start ("));
+        Serial.print((unsigned long)BlockController::GRANT_FREEZE_MS);
+        Serial.println(F(" ms)"));
+    }
+
+    if (newUntil > m_grantFreezeUntilMs)
+        m_grantFreezeUntilMs = newUntil;
+}
+
+bool BlockController::isGrantFreezeActive(uint32_t nowMs) const { return nowMs < m_grantFreezeUntilMs; }
+
 void BlockController::update(uint32_t nowMs)
 {
     // Wichtig: IDs sind 1-basiert (g_blocks[0] = nullptr)
@@ -107,7 +125,26 @@ void BlockController::update(uint32_t nowMs)
         }
 #endif
     }
-    updateGrantBlock4(nowMs);
+    
+    const bool freezeActive = isGrantFreezeActive(nowMs);
+
+    if (!freezeActive && m_grantFreezeUntilMs != 0)
+    {
+        Serial.println(F("[BLK] freeze end"));
+        m_grantFreezeUntilMs = 0;
+    }
+
+    if (!freezeActive)
+    {
+        for (uint8_t id = 1; id <= m_count; ++id)
+        {
+            Block* b = m_blocks ? m_blocks[id] : nullptr;
+            const bool occ = isOccupied(id);
+            m_targetFreeCache[id] = b ? b->isReallyFree(nowMs) : !occ;
+        }
+
+        updateGrantBlock4(nowMs);
+    }
 }
 
 // ------------------------------------------------------------
@@ -289,7 +326,11 @@ bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
     Block* b = m_blocks[toBlock];
     const bool occ = isOccupied(toBlock);
     const uint32_t now = millis();
-    const bool free = b ? b->isReallyFree(now) : !occ;
+    const bool freezeActive = isGrantFreezeActive(now);
+
+    const bool free = freezeActive
+                    ? m_targetFreeCache[toBlock]
+                    : (b ? b->isReallyFree(now) : !occ);
 
 #if MEGA2_DEBUG_BLOCK_GRANT
     logBgrantRateLimited(now,

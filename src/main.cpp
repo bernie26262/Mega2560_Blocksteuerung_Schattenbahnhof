@@ -383,7 +383,6 @@ SystemStatus g_systemStatus;
 // ============================================================================
 static uint32_t lastBlockUpdate = 0;
 static uint32_t lastSbhfUpdate = 0;
-static uint32_t lastWeichenUpdate = 0;
 static bool prevDiagTest = false;
 
 static uint32_t lastStromUpdate  = 0;
@@ -391,7 +390,6 @@ static uint32_t lastPayloadUpdate = 0;
 
 static const uint32_t BLOCK_UPDATE_MS   = 20;
 static const uint32_t SBHF_UPDATE_MS    = 10;
-static const uint32_t WEICHEN_UPDATE_MS = 10;
 static const uint32_t STROM_UPDATE_MS   = 20; // ADC-Update für Stromsensoren
 static const uint32_t PAYLOAD_UPDATE_MS = 100;
 
@@ -927,11 +925,12 @@ void setup()
         PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN, PIN_ADC_TRAFO_OBEN,
     };
 #else
-    static const uint8_t s_adcSchedule[28] = {
-        // 28 Slots gesamt:
+    static const uint8_t s_adcSchedule[34] = {
+        // 34 Slots gesamt:
         //   - Trafo oben:   2 Bursts x 4 Slots
         //   - Trafo unten:  2 Bursts x 4 Slots
         //   - Strom Block1..6: je 1 Burst x 2 Slots
+        //   - Strom SBHF1..3: je 1 Burst x 2 Slots
         //
         // Wirkung mit aktuellem adcIsrSink():
         //   - Trafo:  3 discard + 1 Nutzsample pro 4er-Burst
@@ -939,7 +938,8 @@ void setup()
         //
         // Die Reihenfolge ist absichtlich kurzburstig:
         //   4x OBEN, 4x UNTEN, 2x B1, 2x B4,
-        //   4x OBEN, 4x UNTEN, 2x B2, 2x B5, 2x B3, 2x B6
+        //   4x OBEN, 4x UNTEN, 2x B2, 2x B5, 2x B3, 2x B6,
+        //   2x SBHF1, 2x SBHF2, 2x SBHF3
         //
         // So bleiben die Trafo-Samples zeitlich gut verteilt, waehrend wir
         // gleichzeitig kontrolliert echte Fremdkanaele in den MUX-Rad holen.
@@ -954,6 +954,9 @@ void setup()
         PIN_ADC_BLOCK5,      PIN_ADC_BLOCK5,
         PIN_ADC_BLOCK3,      PIN_ADC_BLOCK3,
         PIN_ADC_BLOCK6,      PIN_ADC_BLOCK6,
+        PIN_ADC_SBH_GL1,     PIN_ADC_SBH_GL1,
+        PIN_ADC_SBH_GL2,     PIN_ADC_SBH_GL2,
+        PIN_ADC_SBH_GL3,     PIN_ADC_SBH_GL3,
     };
 #endif
 
@@ -1222,13 +1225,6 @@ void loop()
             g_sbhf.update(now);
             updateBlockGrantRelays();
         }
-    }
-
-    if (now - lastWeichenUpdate >= WEICHEN_UPDATE_MS)
-    {
-        lastWeichenUpdate = now;
-        w12.update(now); w13.update(now);
-        w14.update(now); w15.update(now);
     }
 
     if (now - lastPayloadUpdate >= PAYLOAD_UPDATE_MS)

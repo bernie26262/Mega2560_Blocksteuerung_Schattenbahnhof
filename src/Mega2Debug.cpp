@@ -125,6 +125,7 @@ void mega2DebugDump()
     DBG_PRINTLN(safetyIsEmergencyActive() ? F("NOT-AUS") : F("OK"));
 
     const SafetyErrorInfo& err = safetyErrorGet();
+    (void)err;
     DBG_PRINT(F("SafetyErr type="));
     DBG_PRINT((uint8_t)err.type);
     DBG_PRINT(F(" idx="));

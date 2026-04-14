@@ -9,7 +9,8 @@ enum SafetyErrorType : uint8_t
     SAFETY_ERR_SBH_WEICHE  = 3,
     SAFETY_ERR_SSR_STUCK        = 4,
     SAFETY_ERR_DOUBLE_OCCUPANCY = 5,
-    SAFETY_ERR_CONTROLLER_FAULT = 6
+    SAFETY_ERR_CONTROLLER_FAULT = 6,
+    SAFETY_ERR_SBH_ROUTE        = 7
 };
 
 struct SafetyErrorInfo

@@ -331,6 +331,17 @@ bool safetyResetEmergency()
     // ------------------------------------------------------------
     if (err.type == SAFETY_ERR_SBH_WEICHE)
     {
+        // Falls der Selftest bereits fertig ist, aber die Safety-Auswertung
+        // noch nicht gelaufen ist, ACK nicht mit einem Neustart beantworten,
+        // sondern nur die Pending-Auswertung aktivieren.
+        if (shadowController.isSelftestDone())
+        {
+            s_sbhfSelftestPending = true;
+            s_sbhfSelftestStartMs = millis();
+            DBG_PRINTLN(F("[SAFETY] ACK accepted (SBH_WEICHE): selftest already done, evaluating"));
+            return true;
+        }
+
         // Wenn Selftest bereits läuft (z.B. via UI-Button), nicht blocken,
         // sondern nur pending setzen und warten bis selftestDone.
         if (shadowController.isSelftestActive())
@@ -355,7 +366,29 @@ bool safetyResetEmergency()
     }
 
     // ------------------------------------------------------------
-    // 5) Doppelte Blockbelegung: ACK nur wenn Strom wieder 0 ist
+    // 5) SBHF Fahrweg-/Strompfadfehler:
+    //    Kein automatischer Selftest.
+    //    ACK nur wenn der SBHF Controller wieder resetfähig ist.
+    // ------------------------------------------------------------
+    if (err.type == SAFETY_ERR_SBH_ROUTE)
+    {
+        if (!shadowController.canReset())
+        {
+            DBG_PRINTLN(F("[SAFETY] ACK blocked (SBH_ROUTE): controller not resettable"));
+            return false;
+        }
+
+        shadowController.onResetAck();
+
+        safetyErrorClear();
+        s_emergencyActive = false;
+        s_lock            = false;
+        s_blockReason     = SAFETY_BLOCK_NONE;
+        return true;
+    }
+
+    // ------------------------------------------------------------
+    // 6) Doppelte Blockbelegung: ACK nur wenn Strom wieder 0 ist
     // ------------------------------------------------------------
     if (err.type == SAFETY_ERR_DOUBLE_OCCUPANCY)
     {
@@ -376,7 +409,7 @@ bool safetyResetEmergency()
     }
 
     // ------------------------------------------------------------
-    // 6) Safety-Controller Fault: Reinit Safety (Boot-Lock)
+    // 7) Safety-Controller Fault: Reinit Safety (Boot-Lock)
     // ------------------------------------------------------------
     if (err.type == SAFETY_ERR_CONTROLLER_FAULT)
     {
@@ -481,7 +514,8 @@ void safetyUpdate()
             shadowController.clearSelftestDone();
 
             const uint8_t allowed = shadowController.allowedGleisMask();
-            const uint8_t warn    = shadowController.warningMask();
+            const uint8_t warn    = shadowController.warningMask(); 
+            (void)warn;
 
             if (allowed == 0)
             {

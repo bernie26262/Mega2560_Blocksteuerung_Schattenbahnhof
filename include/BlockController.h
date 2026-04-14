@@ -9,6 +9,8 @@ class BlockController
 public:
     BlockController(Block** blocks, uint8_t count);
 
+    static constexpr uint32_t GRANT_FREEZE_MS = 2000;
+
     void update(uint32_t nowMs);
 
     uint8_t count() const { return m_count; }
@@ -17,6 +19,9 @@ public:
     bool     isOccupied(uint8_t id) const;
     uint16_t stromFiltered(uint8_t id) const;      // mA (SIM) / heuristisch (HW)
     bool     stromOverThreshold(uint8_t id) const; // optional
+
+    void startGrantFreeze(uint32_t nowMs);
+    bool isGrantFreezeActive(uint32_t nowMs) const;
 
     // Einfahrt in Block erlaubt? (hilft dem SBHF)
     bool canEnter(uint8_t fromBlock, uint8_t toBlock) const;
@@ -47,6 +52,10 @@ private:
     // Cache aus update()
     uint16_t m_stromFiltered[16] = {0};
     bool     m_stromActive[16]   = {false};
+
+    // Freeze / Cache
+    uint32_t m_grantFreezeUntilMs = 0;
+    bool     m_targetFreeCache[16] = {false};
 
 #if MEGA2_DEBUG
     bool     m_dbgActive[16]     = {false};
