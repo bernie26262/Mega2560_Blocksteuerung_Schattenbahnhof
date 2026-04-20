@@ -76,6 +76,43 @@ void BlockController::startGrantFreeze(uint32_t nowMs)
 
 bool BlockController::isGrantFreezeActive(uint32_t nowMs) const { return nowMs < m_grantFreezeUntilMs; }
 
+bool BlockController::isPowerRecoveryBlockActive(uint32_t nowMs) const
+{
+    return nowMs < m_powerRecoveryBlockUntilMs;
+}
+
+bool BlockController::isEntrySuppressedByPower(uint32_t nowMs) const
+{
+    return m_powerUnavailable || isPowerRecoveryBlockActive(nowMs);
+}
+
+void BlockController::setPowerUnavailable(bool unavailable)
+{
+    if (m_powerUnavailable == unavailable)
+        return;
+
+    m_powerUnavailable = unavailable;
+
+    Serial.print(F("[BLK] power "));
+    Serial.println(unavailable ? F("unavailable -> block all entries") : F("available"));
+}
+
+void BlockController::startPowerRecoveryBlock(uint32_t nowMs)
+{
+    const bool wasActive = isPowerRecoveryBlockActive(nowMs);
+    const uint32_t newUntil = nowMs + BlockController::POWER_RECOVERY_BLOCK_MS;
+
+    if (!wasActive)
+    {
+        Serial.print(F("[BLK] power recovery block start ("));
+        Serial.print((unsigned long)BlockController::POWER_RECOVERY_BLOCK_MS);
+        Serial.println(F(" ms)"));
+    }
+
+    if (newUntil > m_powerRecoveryBlockUntilMs)
+        m_powerRecoveryBlockUntilMs = newUntil;
+}
+
 void BlockController::update(uint32_t nowMs)
 {
     // Wichtig: IDs sind 1-basiert (g_blocks[0] = nullptr)
@@ -132,6 +169,12 @@ void BlockController::update(uint32_t nowMs)
     {
         Serial.println(F("[BLK] freeze end"));
         m_grantFreezeUntilMs = 0;
+    }
+
+    if (!isPowerRecoveryBlockActive(nowMs) && m_powerRecoveryBlockUntilMs != 0)
+    {
+        Serial.println(F("[BLK] power recovery block end"));
+        m_powerRecoveryBlockUntilMs = 0;
     }
 
     if (!freezeActive)
@@ -287,14 +330,28 @@ bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
     if (!idOk(toBlock, m_count))
         return false;
 
-    // Merge/Arbitration: für Block 4 nur wenn Grant für den 'fromBlock' aktiv ist
+    const uint32_t now = millis();
+    if (isEntrySuppressedByPower(now))
+    {
+#if MEGA2_DEBUG_BLOCK_GRANT
+        logBgrantRateLimited(now,
+                             fromBlock,
+                             toBlock,
+                             false,
+                             false,
+                             isOccupied(toBlock),
+                             m_grantTo4_from);
+#endif
+        return false;
+    }
+
+        // Merge/Arbitration: für Block 4 nur wenn Grant für den 'fromBlock' aktiv ist
     if (toBlock == 4)
     {
         const bool granted = entryGranted(fromBlock, toBlock);
         if (!granted)
         {
 #if MEGA2_DEBUG_BLOCK_GRANT
-            const uint32_t now = millis();
             logBgrantRateLimited(now,
                                  fromBlock,
                                  toBlock,
@@ -325,7 +382,6 @@ bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
     // Normalbetrieb: Freigabe erst, wenn Block wirklich frei ist (Debounce/Delay)
     Block* b = m_blocks[toBlock];
     const bool occ = isOccupied(toBlock);
-    const uint32_t now = millis();
     const bool freezeActive = isGrantFreezeActive(now);
 
     const bool free = freezeActive

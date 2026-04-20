@@ -75,6 +75,8 @@ uint8_t allowedGleisMask() const { return m_allowedMask; }
 // SBHF-Warnmaske (bits siehe SbhfWarning)
 uint8_t warningMask() const { return m_warningMask; }
 
+bool isS11StartPending() const { return m_s11StartPending; }
+
 // --------------------------------------------------------
 // Selbsttest (nach ACK bei SBHF-Weichenfehler)
 // --------------------------------------------------------
@@ -182,6 +184,8 @@ private:
     uint8_t currentSbhfBlockId() const;
     bool    isCurrentExitGleisOccupied() const;
     void    triggerRouteError(uint8_t idx, const __FlashStringHelper* reason);
+    bool    isPowerTransitionBlocked(uint32_t nowMs) const;
+    void    forceSafePowerOffForPowerTransition();
 
     // ---------------- Gleiswahl ----------------
     uint8_t peekNextGleis() const;
@@ -226,6 +230,16 @@ private:
 
     // Exit-Überwachung
     bool     m_exitWasOccupiedAtStart;
+
+    // EntryRunning endet erst, wenn beide Kontaktbedingungen erfüllt sind:
+    bool     m_entrySawExitMarker;   // S12 / S13 / S14 passend zum Zielgleis
+    bool     m_entrySawTargetGf;     // GF1 / GF2 / GF3 passend zum Zielgleis
+
+    // S11-One-Shot Logik
+    // pending: S11 kam während Blocksperre -> nachziehen
+    // consumed: pro Idle-Periode nur ein Trigger erlaubt
+    bool m_s11StartPending;
+    bool m_s11TriggerConsumed;
 
     // Flags
     bool m_errorActive;

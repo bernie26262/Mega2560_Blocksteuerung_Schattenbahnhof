@@ -88,6 +88,10 @@ ShadowYardController::ShadowYardController(BlockController* bc)
   m_cycleNeedsExitFirst(false),
   m_targetFreeSinceMs(0),
   m_exitWasOccupiedAtStart(false),
+  m_entrySawExitMarker(false),
+  m_s11StartPending(false),
+  m_s11TriggerConsumed(false),
+  m_entrySawTargetGf(false),
   m_errorActive(false),
   m_exitPowerOn(false),
   m_readyRouteOnly(false),
@@ -122,6 +126,10 @@ void ShadowYardController::begin()
     m_cycleNeedsExitFirst = false;
     m_targetFreeSinceMs = 0;
     m_exitWasOccupiedAtStart = false;
+    m_entrySawExitMarker = false;
+    m_s11StartPending = false;
+    m_s11TriggerConsumed = false;
+    m_entrySawTargetGf = false;
 
     // Boot-sicher: Einfahrpfad immer AUS, bis Route+Belegung stabil bewertet wurden
     g_power.setBlock5ToSBhf(false);
@@ -256,9 +264,48 @@ void ShadowYardController::triggerRouteError(uint8_t idx, const __FlashStringHel
     safetySetEmergency(true);
 }
 
+bool ShadowYardController::isPowerTransitionBlocked(uint32_t nowMs) const
+{
+    return m_bc && m_bc->isEntrySuppressedByPower(nowMs);
+}
+
+void ShadowYardController::forceSafePowerOffForPowerTransition()
+{
+    g_power.setBlock5ToSBhf(false);
+    g_power.setSbhfGleis(1, false);
+    g_power.setSbhfGleis(2, false);
+    g_power.setSbhfGleis(3, false);
+
+    m_exitPowerOn = false;
+    m_exitStartMs = 0;
+    m_exitWasOccupiedAtStart = false;
+    m_targetFreeSinceMs = 0;
+    m_entrySawExitMarker = false;
+    m_entrySawTargetGf = false;
+
+    if (m_state == SBhfState::WaitBlock6 ||
+        m_state == SBhfState::ExitRunning ||
+        m_state == SBhfState::WaitEntryAfterExitFree ||
+        m_state == SBhfState::EntryRunning)
+    {
+        // Laufenden Zyklus kontrolliert abbrechen. Neuer Start erst nach stabiler Power-Lage
+        // und erneutem S11. Kein Resume ueber die instabile Power-Phase hinweg.
+        m_state = SBhfState::Idle;
+        m_currentGleis = 0;
+        m_cycleNeedsExitFirst = false;
+        m_resumePending = false;
+        m_resumeGleis = 0;
+        m_resumeState = SBhfState::Idle;
+    }
+}
+
 void ShadowYardController::updateBlock5ToSbhfPower(uint32_t nowMs)
 {
-    (void)nowMs;
+    if (isPowerTransitionBlocked(nowMs))
+    {
+        g_power.setBlock5ToSBhf(false);
+        return;
+    }
 
     // Block5 -> SBHF ist künftig ausschließlich state-gesteuert.
     // Nur während der expliziten Einfahrt darf dieser Powerpfad aktiv sein.
@@ -301,11 +348,33 @@ void ShadowYardController::onS11()
     if (m_state != SBhfState::Idle || m_errorActive)
         return;
 
-    m_currentGleis = pickNextGleis();
+    // One-shot: nur einmal pro Idle-Periode
+    if (m_s11TriggerConsumed)
+    {
+        DBG_PRINTLN(F("[SBHF] S11 ignored (already consumed)"));
+        return;
+    }
+
+    // Während Blocksperre: nicht verwerfen, sondern merken
+    if (isPowerTransitionBlocked(millis()))
+    {
+        m_s11StartPending = true;
+        m_s11TriggerConsumed = true;
+        DBG_PRINTLN(F("[SBHF] S11 latched (power transition)"));
+        return;
+    }
+
+    // Normalfall: sofort starten
+    const uint8_t gleis = pickNextGleis();
+    if (gleis < 1 || gleis > 3)
+        return;
+
+    m_currentGleis = gleis;
     m_cycleNeedsExitFirst = isInboundTargetOccupied(m_currentGleis);
     m_targetFreeSinceMs = 0;
     buildWeichenPlan(m_currentGleis);
     m_state = SBhfState::PrepareCycle;
+    m_s11TriggerConsumed = true;
 }
 
 void ShadowYardController::onS12()
@@ -316,14 +385,9 @@ void ShadowYardController::onS12()
         return;
     }
 
-    if (m_state == SBhfState::ExitRunning && m_currentGleis == 1)
+    if (m_state == SBhfState::EntryRunning && m_currentGleis == 1)
     {
-        g_power.setSbhfGleis(1, false);
-        m_exitPowerOn = false;
-        m_exitStartMs = 0;
-        m_exitWasOccupiedAtStart = false;
-        m_targetFreeSinceMs = 0;
-        m_state = SBhfState::WaitEntryAfterExitFree;
+        m_entrySawExitMarker = true;
     }
 }
 
@@ -335,14 +399,9 @@ void ShadowYardController::onS13()
         return;
     }
 
-    if (m_state == SBhfState::ExitRunning && m_currentGleis == 2)
+    if (m_state == SBhfState::EntryRunning && m_currentGleis == 2)
     {
-        g_power.setSbhfGleis(2, false);
-        m_exitPowerOn = false;
-        m_exitStartMs = 0;
-        m_exitWasOccupiedAtStart = false;
-        m_targetFreeSinceMs = 0;
-        m_state = SBhfState::WaitEntryAfterExitFree;
+        m_entrySawExitMarker = true;
     }
 }
 
@@ -354,14 +413,9 @@ void ShadowYardController::onS14()
         return;
     }
 
-    if (m_state == SBhfState::ExitRunning && m_currentGleis == 3)
+    if (m_state == SBhfState::EntryRunning && m_currentGleis == 3)
     {
-        g_power.setSbhfGleis(3, false);
-        m_exitPowerOn = false;
-        m_exitStartMs = 0;
-        m_exitWasOccupiedAtStart = false;
-        m_targetFreeSinceMs = 0;
-        m_state = SBhfState::WaitEntryAfterExitFree;
+        m_entrySawExitMarker = true;
     }
 }
 
@@ -464,14 +518,44 @@ void ShadowYardController::update(uint32_t nowMs)
     w14.update(nowMs);
     w15.update(nowMs);
 
-    // Block5 -> SBHF wird ausschließlich state-gesteuert geführt.
-    // Aktiv nur während EntryRunning.
-    updateBlock5ToSbhfPower(nowMs);
-
     if (m_selftestActive)
     {
         selftestUpdate(nowMs);
         return;
+    }
+
+    if (isPowerTransitionBlocked(nowMs))
+    {
+        forceSafePowerOffForPowerTransition();
+        return;
+    }
+
+    // Block5 -> SBHF wird ausschließlich state-gesteuert geführt.
+    // Aktiv nur während EntryRunning.
+    updateBlock5ToSbhfPower(nowMs);
+
+    // Nachziehen eines während Blocksperre erfassten S11
+    if (m_s11StartPending &&
+        !m_errorActive &&
+        m_state == SBhfState::Idle &&
+        !safetyIsLocked() &&
+        !safetyIsEmergencyActive())
+    {
+        const uint8_t gleis = pickNextGleis();
+        if (gleis >= 1 && gleis <= 3)
+        {
+            m_currentGleis = gleis;
+            m_cycleNeedsExitFirst = isInboundTargetOccupied(m_currentGleis);
+            m_targetFreeSinceMs = 0;
+            buildWeichenPlan(m_currentGleis);
+            m_state = SBhfState::PrepareCycle;
+
+            m_s11StartPending = false;
+            // consumed bleibt true!
+
+            DBG_PRINTF("[SBHF] S11 pending -> start cycle Gleis %u\n", (unsigned)m_currentGleis);
+            return;
+        }
     }
 
     // SafetyLock / NOTAUS: SBHF-Automat darf keine Aktionen durchführen
@@ -530,21 +614,35 @@ void ShadowYardController::update(uint32_t nowMs)
             // Harter Anlagenbezug:
             // Wenn die Ausfahrt aktiv ist und das aktive SBHF-Gleis beim Start belegt war,
             // muss diese Belegung innerhalb von 8 s verschwinden. Sonst Emergency.
-            if (m_exitPowerOn && m_exitWasOccupiedAtStart)
+            if (isCurrentExitGleisOccupied())
             {
-                if (!isCurrentExitGleisOccupied())
-                {
-                    // Zug hat das SBHF-Gleis tatsächlich verlassen
-                    m_exitWasOccupiedAtStart = false;
-                    m_exitStartMs = 0;
-                }
-                else if (m_exitStartMs != 0 &&
-                         (nowMs - m_exitStartMs) >= SBHF_EXIT_STILL_OCC_TIMEOUT_MS)
+                m_targetFreeSinceMs = 0;
+
+                if (m_exitPowerOn && m_exitWasOccupiedAtStart &&
+                    m_exitStartMs != 0 &&
+                    (nowMs - m_exitStartMs) >= SBHF_EXIT_STILL_OCC_TIMEOUT_MS)
                 {
                     triggerRouteError(
                         m_currentGleis,
                         F("active SBHF exit still occupied after 8s")
                     );
+                }
+            }
+            else
+            {
+                if (m_targetFreeSinceMs == 0)
+                {
+                    m_targetFreeSinceMs = nowMs;
+                }
+                else if ((nowMs - m_targetFreeSinceMs) >= BLOCK5_TO_SBHF_FREE_DELAY_MS)
+                {
+                    g_power.setSbhfGleis(m_currentGleis, false);
+                    m_exitPowerOn = false;
+                    m_exitStartMs = 0;
+                    m_exitWasOccupiedAtStart = false;
+                    m_entrySawExitMarker = false;
+                    m_entrySawTargetGf = false;
+                    m_state = SBhfState::EntryRunning;
                 }
             }
             break;
@@ -572,21 +670,33 @@ void ShadowYardController::update(uint32_t nowMs)
 
             if ((nowMs - m_targetFreeSinceMs) >= BLOCK5_TO_SBHF_FREE_DELAY_MS)
             {
+                m_entrySawExitMarker = false;
+                m_entrySawTargetGf = false;
                 m_state = SBhfState::EntryRunning;
             }
             break;
         }
 
         case SBhfState::EntryRunning:
-            // Ende der Einfahrt erst dann, wenn der zielgleisspezifische
-            // Kontakt GF1/GF2/GF3 tatsächlich erreicht wurde.
             if (m_currentGleis >= 1 && m_currentGleis <= 3 &&
                 isEntryTargetContactOccupied(m_currentGleis))
             {
+                m_entrySawTargetGf = true;
+            }
+
+            // Ende der Einfahrt erst dann, wenn der zugehörige S-Kontakt
+            // (S12/S13/S14) UND der Zielkontakt GF1/GF2/GF3 erreicht wurden.
+            if (m_currentGleis >= 1 && m_currentGleis <= 3 &&
+                m_entrySawExitMarker &&
+                m_entrySawTargetGf)
+            {
                 g_power.setBlock5ToSBhf(false);
                 m_targetFreeSinceMs = 0;
+                m_entrySawExitMarker = false;
+                m_entrySawTargetGf = false;
                 m_cycleNeedsExitFirst = false;
                 m_currentGleis = 0;
+                m_s11TriggerConsumed = false; // Re-Arm nach echtem Zyklusende
                 m_state = SBhfState::Idle;
             }
             break;
@@ -970,6 +1080,10 @@ void ShadowYardController::resetError()
     m_targetFreeSinceMs = 0;
     m_exitStartMs = 0;
     m_exitWasOccupiedAtStart = false;
+    m_entrySawExitMarker = false;
+    m_entrySawTargetGf = false;
+    m_s11StartPending = false;
+    m_s11TriggerConsumed = false;
     g_power.setBlock5ToSBhf(false);
     g_power.setSbhfGleis(1, false);
     g_power.setSbhfGleis(2, false);

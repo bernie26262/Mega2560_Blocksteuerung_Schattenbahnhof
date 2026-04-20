@@ -131,6 +131,9 @@ Mega2PowerControl g_power;
 SensorTrafoAC g_trafoOben(PIN_ADC_TRAFO_OBEN);
 SensorTrafoAC g_trafoUnten(PIN_ADC_TRAFO_UNTEN);
 
+static constexpr float TRAFO_BLOCK_OFF_THRESHOLD_V = 4.0f;
+static constexpr float TRAFO_BLOCK_ON_THRESHOLD_V  = 5.0f;
+
 // ADC scheduler sink: feed trafo sensors inside ADC ISR (jitter-proof).
 static void adcIsrSink(uint8_t channel, uint16_t value)
 {
@@ -739,6 +742,46 @@ static void logBrelayChange(uint32_t now,
 #endif
 
 
+static void updateTrafoPowerRecoveryBlock(uint32_t now)
+{
+    static bool s_initialized = false;
+    static bool s_anyTrafoLowLatched = false;
+
+    const float vOben  = g_trafoOben.rms();
+    const float vUnten = g_trafoUnten.rms();
+
+    const bool anyLow = (vOben <= TRAFO_BLOCK_OFF_THRESHOLD_V) ||
+                        (vUnten <= TRAFO_BLOCK_OFF_THRESHOLD_V);
+    const bool bothRecovered = (vOben >= TRAFO_BLOCK_ON_THRESHOLD_V) &&
+                               (vUnten >= TRAFO_BLOCK_ON_THRESHOLD_V);
+
+    g_bc.setPowerUnavailable(anyLow);
+
+    if (!s_initialized)
+    {
+        if (bothRecovered)
+        {
+            // Auch beim Systemstart mit bereits aktiven Trafos zunaechst sperren,
+            // bis Strom-/Belegterkennung stabil anlaufen konnte.
+            g_bc.startPowerRecoveryBlock(now);
+        }
+
+        s_initialized = true;
+    }
+
+    if (anyLow)
+    {
+        s_anyTrafoLowLatched = true;
+        return;
+    }
+
+    if (s_anyTrafoLowLatched && bothRecovered)
+    {
+        g_bc.startPowerRecoveryBlock(now);
+        s_anyTrafoLowLatched = false;
+    }
+}
+
 static void updateBlockGrantRelays()
 {
     // Automatische Freigaberelais nur außerhalb von DIAG_TEST setzen.
@@ -1069,6 +1112,7 @@ void loop()
     // Sampling itself is done in ISR (AdcScheduler).
     g_trafoOben.update(now);
     g_trafoUnten.update(now);
+    updateTrafoPowerRecoveryBlock(now);
 
     // Build analog snapshot at a low rate for the ESP/UI.
     // NOTE: Analog snapshot is built from non-blocking sensors (no blocking sampling).

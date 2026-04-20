@@ -83,8 +83,9 @@ void buildMega2ShadowStatus(ShadowYardStatus& out,
     // Belegung SBHF-Gleise kann später sauber gesetzt werden, wenn gewünscht.
     // Für Startup-Flags reicht das hier:
     out.selftestFlags = 0;
-    if (sy.isSelftestActive()) out.selftestFlags |= 0x01;
-    if (sy.isSelftestDone())   out.selftestFlags |= 0x02;
+    if (sy.isSelftestActive())    out.selftestFlags |= 0x01;
+    if (sy.isSelftestDone())      out.selftestFlags |= 0x02;
+    if (sy.isS11StartPending())   out.selftestFlags |= 0x04;
 }
 
 // --------------------------------------------------

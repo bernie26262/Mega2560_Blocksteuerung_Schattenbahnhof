@@ -10,6 +10,7 @@ public:
     BlockController(Block** blocks, uint8_t count);
 
     static constexpr uint32_t GRANT_FREEZE_MS = 2000;
+    static constexpr uint32_t POWER_RECOVERY_BLOCK_MS = 4000;
 
     void update(uint32_t nowMs);
 
@@ -22,6 +23,11 @@ public:
 
     void startGrantFreeze(uint32_t nowMs);
     bool isGrantFreezeActive(uint32_t nowMs) const;
+
+    void setPowerUnavailable(bool unavailable);
+    void startPowerRecoveryBlock(uint32_t nowMs);
+    bool isPowerRecoveryBlockActive(uint32_t nowMs) const;
+    bool isEntrySuppressedByPower(uint32_t nowMs) const;
 
     // Einfahrt in Block erlaubt? (hilft dem SBHF)
     bool canEnter(uint8_t fromBlock, uint8_t toBlock) const;
@@ -56,6 +62,9 @@ private:
     // Freeze / Cache
     uint32_t m_grantFreezeUntilMs = 0;
     bool     m_targetFreeCache[16] = {false};
+
+    bool     m_powerUnavailable = false;
+    uint32_t m_powerRecoveryBlockUntilMs = 0;
 
 #if MEGA2_DEBUG
     bool     m_dbgActive[16]     = {false};
