@@ -89,9 +89,9 @@ ShadowYardController::ShadowYardController(BlockController* bc)
   m_targetFreeSinceMs(0),
   m_exitWasOccupiedAtStart(false),
   m_entrySawExitMarker(false),
+  m_entrySawTargetGf(false),
   m_s11StartPending(false),
   m_s11TriggerConsumed(false),
-  m_entrySawTargetGf(false),
   m_errorActive(false),
   m_exitPowerOn(false),
   m_readyRouteOnly(false),
@@ -127,9 +127,9 @@ void ShadowYardController::begin()
     m_targetFreeSinceMs = 0;
     m_exitWasOccupiedAtStart = false;
     m_entrySawExitMarker = false;
+    m_entrySawTargetGf = false;
     m_s11StartPending = false;
     m_s11TriggerConsumed = false;
-    m_entrySawTargetGf = false;
 
     // Boot-sicher: Einfahrpfad immer AUS, bis Route+Belegung stabil bewertet wurden
     g_power.setBlock5ToSBhf(false);
@@ -276,26 +276,14 @@ void ShadowYardController::forceSafePowerOffForPowerTransition()
     g_power.setSbhfGleis(2, false);
     g_power.setSbhfGleis(3, false);
 
-    m_exitPowerOn = false;
-    m_exitStartMs = 0;
-    m_exitWasOccupiedAtStart = false;
-    m_targetFreeSinceMs = 0;
-    m_entrySawExitMarker = false;
-    m_entrySawTargetGf = false;
-
-    if (m_state == SBhfState::WaitBlock6 ||
-        m_state == SBhfState::ExitRunning ||
-        m_state == SBhfState::WaitEntryAfterExitFree ||
-        m_state == SBhfState::EntryRunning)
+    // Power-Transition bedeutet nur: Leistungspfade sicher AUS.
+    // Der laufende SBHF-Zyklus wird NICHT auf Idle zurückgesetzt,
+    // sondern nach stabiler Power-Lage an derselben Stelle fortgesetzt.
+    // Für ExitRunning wird der aktive Fahrspannungsabschnitt pausiert.
+    if (m_state == SBhfState::ExitRunning && m_exitPowerOn)
     {
-        // Laufenden Zyklus kontrolliert abbrechen. Neuer Start erst nach stabiler Power-Lage
-        // und erneutem S11. Kein Resume ueber die instabile Power-Phase hinweg.
-        m_state = SBhfState::Idle;
-        m_currentGleis = 0;
-        m_cycleNeedsExitFirst = false;
-        m_resumePending = false;
-        m_resumeGleis = 0;
-        m_resumeState = SBhfState::Idle;
+        m_exitPowerOn = false;
+        m_exitStartMs = 0;   // Timeout pausieren; nach Recovery neu starten
     }
 }
 
@@ -524,6 +512,14 @@ void ShadowYardController::update(uint32_t nowMs)
         return;
     }
 
+    // Weichenstellen muss auch bei aktiver Power-Transition-Sperre weiterlaufen können.
+    // Sonst bleiben Ready-Route oder normaler Zyklus in SettingWeichen hängen.
+    if (m_state == SBhfState::SettingWeichen)
+    {
+        processWeichenSequence(nowMs);
+        return;
+    }
+
     if (isPowerTransitionBlocked(nowMs))
     {
         forceSafePowerOffForPowerTransition();
@@ -577,7 +573,7 @@ void ShadowYardController::update(uint32_t nowMs)
             break;
 
         case SBhfState::SettingWeichen:
-            processWeichenSequence(nowMs);
+            // Wird bereits vor dem switch behandelt.
             break;
 
         case SBhfState::WaitBlock6:
@@ -611,6 +607,22 @@ void ShadowYardController::update(uint32_t nowMs)
         }
 
         case SBhfState::ExitRunning:
+            // Nach einer Power-Transition den Ausfahrpfad wieder einschalten und
+            // den Exit-Timeout ab diesem Resume-Zeitpunkt neu starten.
+            if (!m_exitPowerOn)
+            {
+                if (m_currentGleis < 1 || m_currentGleis > 3)
+                {
+                    triggerRouteError(0, F("invalid current gleis in ExitRunning"));
+                    break;
+                }
+
+                g_power.setSbhfGleis(m_currentGleis, true);
+                m_exitPowerOn = true;
+                m_exitStartMs = nowMs;
+                DBG_PRINTF("[SBHF] Exit resumed after power transition (Gleis %u)\n", (unsigned)m_currentGleis);
+            }
+
             // Harter Anlagenbezug:
             // Wenn die Ausfahrt aktiv ist und das aktive SBHF-Gleis beim Start belegt war,
             // muss diese Belegung innerhalb von 8 s verschwinden. Sonst Emergency.
@@ -696,6 +708,7 @@ void ShadowYardController::update(uint32_t nowMs)
                 m_entrySawTargetGf = false;
                 m_cycleNeedsExitFirst = false;
                 m_currentGleis = 0;
+                m_s11StartPending = false;
                 m_s11TriggerConsumed = false; // Re-Arm nach echtem Zyklusende
                 m_state = SBhfState::Idle;
             }
