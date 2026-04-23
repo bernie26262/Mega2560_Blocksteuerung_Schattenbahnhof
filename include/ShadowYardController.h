@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "safety_error.h"
 
 // forward decls ...
 class BlockController;
@@ -183,7 +184,9 @@ private:
     void    updateBlock5ToSbhfPower(uint32_t nowMs);
     uint8_t currentSbhfBlockId() const;
     bool    isCurrentExitGleisOccupied() const;
-    void    triggerRouteError(uint8_t idx, const __FlashStringHelper* reason);
+    void    triggerSbhfEmergency(ErrorCause cause, uint8_t idx, uint8_t detailCode,
+                                 const __FlashStringHelper* category,
+                                 const __FlashStringHelper* reason);
     bool    isPowerTransitionBlocked(uint32_t nowMs) const;
     void    forceSafePowerOffForPowerTransition();
 
@@ -234,6 +237,9 @@ private:
     // EntryRunning endet erst, wenn beide Kontaktbedingungen erfüllt sind:
     bool     m_entrySawExitMarker;   // S12 / S13 / S14 passend zum Zielgleis
     bool     m_entrySawTargetGf;     // GF1 / GF2 / GF3 passend zum Zielgleis
+    bool     m_entryMonitorActive;   // Überwachung gestartet, sobald B5->SBHF belegt + Strom an
+    uint32_t m_entryStartMs;         // 8s bis S12/S13/S14 (zielabhängig)
+    uint32_t m_entryAfterMarkerStartMs; // danach 8s bis GF1/GF2/GF3
 
     // S11-One-Shot Logik
     // pending: S11 kam während Blocksperre -> nachziehen

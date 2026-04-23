@@ -5,7 +5,7 @@
 // Wire-format version.
 // IMPORTANT: Mega1 and Mega2 must share the same version/size.
 // Selftest runtime information is encoded in sbhfOccupiedMask META bits (see Mega2Status.cpp).
-static constexpr uint8_t SYSTEM_STATUS_VERSION = 3;
+static constexpr uint8_t SYSTEM_STATUS_VERSION = 4;
 
 enum SystemNodeId : uint8_t
 {
@@ -27,7 +27,7 @@ enum SystemStatusFlags : uint16_t
     SYS_MODE_DIAG        = 1 << 5,
 };
 
-// v3 (kompakt) — PACKED für stabile I2C-Übertragung
+// v4 (kompakt) — PACKED für stabile I2C-Übertragung
 struct __attribute__((packed)) SystemStatus
 {
     uint8_t  version;
@@ -39,8 +39,10 @@ struct __attribute__((packed)) SystemStatus
 
     uint16_t flags;
 
-    uint8_t  safetyErrorType;
-    uint8_t  safetyErrorIndex;
+    uint8_t  errorCause;
+    uint8_t  errorIndex;
+    uint8_t  errorDetailCode;
+    uint8_t  reservedErr;
 
     uint16_t blockOccupiedMask;
 
@@ -59,4 +61,4 @@ struct __attribute__((packed)) SystemStatus
     uint16_t reserved;         // Variant A: allowedMask<<8 | warningMask
 };
 
-static_assert(sizeof(SystemStatus) == 26, "SystemStatus must be 26 bytes (packed)");
+static_assert(sizeof(SystemStatus) == 28, "SystemStatus must be 28 bytes (packed)");

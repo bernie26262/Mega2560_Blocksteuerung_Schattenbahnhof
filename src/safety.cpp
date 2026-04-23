@@ -212,8 +212,8 @@ void safetySetEmergency(bool on)
 
     if (on)
     {
-        // Generischer Emergency-Einstieg: Details (Reason/Index) kommen über safetyErrorSet()
-        // von den jeweiligen Triggern. Nur wenn kein Fehler gesetzt ist, wird NOTAUS angenommen.
+        // Generischer Emergency-Einstieg: Details kommen über safetyErrorSet()
+        // von den jeweiligen Triggern. Kein impliziter Sammelfehler mehr.
         if (s_blockReason == SAFETY_BLOCK_NONE || s_blockReason == SAFETY_BLOCK_BOOT)
             s_blockReason = SAFETY_BLOCK_EMERGENCY;
 
@@ -224,8 +224,6 @@ void safetySetEmergency(bool on)
         safetySetSSR(SSR_TRAFO_A,     false);
         safetySetSSR(SSR_TRAFO_B,     false);
 
-        if (!safetyErrorActive())
-            safetyErrorSet(SAFETY_ERR_NOTAUS, 0);
     }
     else
     {
@@ -264,7 +262,7 @@ bool safetyResetEmergency()
     // ------------------------------------------------------------
     // 1) Block-Short: ACK nur wenn Strom wieder 0 ist
     // ------------------------------------------------------------
-    if (err.type == SAFETY_ERR_BLOCK_SHORT)
+    if (err.cause == ERR_CAUSE_BLOCK_SHORT)
     {
         const uint8_t b = (err.index >= 1 && err.index <= g_bc.count()) ? err.index : 6;
         const uint16_t i = safetyBlockCurrentMa(b);
@@ -282,33 +280,19 @@ bool safetyResetEmergency()
     }
 
     // ------------------------------------------------------------
-    // 2) SSR-Stuck: ACK nur wenn Trafo unten wirklich "aus" ist
+    // 2) SSR_STUCK ist vorbereitet, aber aktuell nicht aktiv verdrahtet.
     // ------------------------------------------------------------
-    if (err.type == SAFETY_ERR_SSR_STUCK)
-    {
-        if (isTrafoUntenPowered())
-        {
-            DBG_PRINTLN(F("[SAFETY] ACK blocked (SSR_STUCK): Trafo unten still powered"));
-            return false;
-        }
-
-        safetyErrorClear();
-        s_emergencyActive = false;
-        s_lock            = false;
-        s_blockReason     = SAFETY_BLOCK_NONE;
-        return true;
-    }
 
     // ------------------------------------------------------------
     // 3) NOTAUS (Reverse-Entry / Stopzone Kontakt)
     //    ACK nur wenn Kontaktgleis frei ist.
     //    (SBHF-Reset NICHT automatisch!)
     // ------------------------------------------------------------
-    if (err.type == SAFETY_ERR_NOTAUS && s_emergNothaltSbhfLatched)
+    if (err.cause == ERR_CAUSE_SBH_FALSE_ENTRY && s_emergNothaltSbhfLatched)
     {
         if (k_nothalt.raw())
         {
-            DBG_PRINTLN(F("[SAFETY] ACK blocked (NOTAUS): Stopzone contact still occupied"));
+            DBG_PRINTLN(F("[SAFETY] ACK blocked (SBH_FALSE_ENTRY): Stopzone contact still occupied"));
             return false;
         }
 
@@ -329,7 +313,7 @@ bool safetyResetEmergency()
     //    oder eingeschränkter Betrieb (Warn + allowedMask),
     //    oder kein sicherer Pfad (Lock bleibt).
     // ------------------------------------------------------------
-    if (err.type == SAFETY_ERR_SBH_WEICHE)
+    if (err.cause == ERR_CAUSE_SBH_WEICHE)
     {
         // Falls der Selftest bereits fertig ist, aber die Safety-Auswertung
         // noch nicht gelaufen ist, ACK nicht mit einem Neustart beantworten,
@@ -370,11 +354,11 @@ bool safetyResetEmergency()
     //    Kein automatischer Selftest.
     //    ACK nur wenn der SBHF Controller wieder resetfähig ist.
     // ------------------------------------------------------------
-    if (err.type == SAFETY_ERR_SBH_ROUTE)
+    if (err.cause == ERR_CAUSE_SBH_CONTROLLER_FAULT || err.cause == ERR_CAUSE_SBH_EXIT_TIMEOUT || err.cause == ERR_CAUSE_SBH_ENTRY_TIMEOUT || err.cause == ERR_CAUSE_SBH_ENTRY_WRONG_TRACK)
     {
         if (!shadowController.canReset())
         {
-            DBG_PRINTLN(F("[SAFETY] ACK blocked (SBH_ROUTE): controller not resettable"));
+            DBG_PRINTLN(F("[SAFETY] ACK blocked (SBHF entry/route fault): controller not resettable"));
             return false;
         }
 
@@ -390,7 +374,7 @@ bool safetyResetEmergency()
     // ------------------------------------------------------------
     // 6) Doppelte Blockbelegung: ACK nur wenn Strom wieder 0 ist
     // ------------------------------------------------------------
-    if (err.type == SAFETY_ERR_DOUBLE_OCCUPANCY)
+    if (err.cause == ERR_CAUSE_DOUBLE_OCCUPANCY)
     {
         const uint8_t b = (err.index >= 1 && err.index <= g_bc.count()) ? err.index : 0;
         const uint16_t i = (b ? safetyBlockCurrentMa(b) : 0);
@@ -411,7 +395,7 @@ bool safetyResetEmergency()
     // ------------------------------------------------------------
     // 7) Safety-Controller Fault: Reinit Safety (Boot-Lock)
     // ------------------------------------------------------------
-    if (err.type == SAFETY_ERR_CONTROLLER_FAULT)
+    if (err.cause == ERR_CAUSE_CONTROLLER_FAULT)
     {
         DBG_PRINTLN(F("[SAFETY] ACK accepted (CTRL_FAULT): reinit safety subsystem (boot-lock)"));
 
@@ -440,7 +424,7 @@ bool safetyResetEmergency()
 void safetyNotifySbhfSelftestStarted()
 {
     // Nur sinnvoll im Kontext SBHF-Weichenfehler
-    if (safetyErrorGet().type != SAFETY_ERR_SBH_WEICHE)
+    if (safetyErrorGet().cause != ERR_CAUSE_SBH_WEICHE)
         return;
 
     s_sbhfSelftestPending = true;
@@ -463,7 +447,7 @@ void safetyTriggerBlockShort(uint8_t block)
     s_lock            = true;
     s_blockReason     = SAFETY_BLOCK_SHORT;
 
-    safetyErrorSet(SAFETY_ERR_BLOCK_SHORT, block);
+    safetyErrorSet(ERR_CAUSE_BLOCK_SHORT, block);
 
     DBG_PRINT(F("[SAFETY] EMERG_BLOCK_SHORT(B"));
     DBG_PRINT(block);
@@ -481,7 +465,7 @@ void safetyUpdate()
     {
         if (s_lastSafetyUpdateMs != 0 && (now - s_lastSafetyUpdateMs) > SAFETY_TICK_MAX_GAP_MS)
         {
-            safetyErrorSet(SAFETY_ERR_CONTROLLER_FAULT, 1); // tick gap
+            safetyErrorSet(ERR_CAUSE_CONTROLLER_FAULT, 0, ERR_DETAIL_CTRL_TICK_GAP);
             safetySetEmergency(true);
             DBG_PRINTLN(F("[SAFETY] EMERG_CONTROLLER_FAULT(tick-gap) -> ALL OFF, LOCK"));
             s_lastSafetyUpdateMs = now;
@@ -491,7 +475,7 @@ void safetyUpdate()
         // einfache Invariants (nur Beispiele; erweitert man bei Bedarf)
         if (s_lock && s_blockReason == SAFETY_BLOCK_NONE)
         {
-            safetyErrorSet(SAFETY_ERR_CONTROLLER_FAULT, 2); // inkonsistent
+            safetyErrorSet(ERR_CAUSE_CONTROLLER_FAULT, 0, ERR_DETAIL_CTRL_INVARIANT);
             safetySetEmergency(true);
             DBG_PRINTLN(F("[SAFETY] EMERG_CONTROLLER_FAULT(invariant) -> ALL OFF, LOCK"));
             s_lastSafetyUpdateMs = now;
@@ -506,7 +490,7 @@ void safetyUpdate()
     // SBHF Weichenfehler: Selftest-Auswertung nach (extern/ACK) gestartetem Selftest.
     // Nicht zusätzlich an s_emergencyActive koppeln, sonst kann ein Deadlock entstehen,
     // wenn Emergency/Lock-Zustände zwischendrin anders gesetzt/geresettet wurden.
-    if (s_sbhfSelftestPending && safetyErrorGet().type == SAFETY_ERR_SBH_WEICHE)
+    if (s_sbhfSelftestPending && safetyErrorGet().cause == ERR_CAUSE_SBH_WEICHE)
     {
         if (shadowController.isSelftestDone())
         {
@@ -575,7 +559,7 @@ void safetyUpdate()
             s_blockReason             = SAFETY_BLOCK_EMERGENCY;
             s_emergNothaltSbhfLatched = true;
 
-            safetyErrorSet(SAFETY_ERR_NOTAUS, 6);
+            safetyErrorSet(ERR_CAUSE_SBH_FALSE_ENTRY, 6, ERR_DETAIL_SBH_FALSE_ENTRY_STOPZONE);
 
             DBG_PRINTLN(F("[SAFETY] EMERG_REVERSE_ENTRY(Stopzone) -> SSR_A/B OFF, LOCK"));
             return;
@@ -653,7 +637,7 @@ void safetyUpdate()
                     if (s_doubleOccStartMs[b] == 0) s_doubleOccStartMs[b] = now;
                     if ((now - s_doubleOccStartMs[b]) >= DOUBLE_OCC_DETECT_MS)
                     {
-                        safetyErrorSet(SAFETY_ERR_DOUBLE_OCCUPANCY, b);
+                        safetyErrorSet(ERR_CAUSE_DOUBLE_OCCUPANCY, b, hardTrip ? ERR_DETAIL_DOUBLE_OCC_HARD_TRIP : ERR_DETAIL_DOUBLE_OCC_ADAPTIVE_TRIP);
                         safetySetEmergency(true);
 
                         DBG_PRINTF("[SAFETY] EMERG_DOUBLE_OCCUPANCY(B%d) iNow=%umA iBase=%umA thr=%umA -> ALL OFF, LOCK\n",

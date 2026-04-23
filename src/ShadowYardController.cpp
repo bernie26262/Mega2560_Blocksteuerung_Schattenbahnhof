@@ -52,6 +52,8 @@ static constexpr uint32_t WEICHE_MIN_CHECK_MS = 800;   // frühester Ist-Check
 static constexpr uint32_t WEICHE_TIMEOUT_MS   = 2500;  // Hard-Error
 static constexpr uint32_t BLOCK5_TO_SBHF_FREE_DELAY_MS = 1250;
 static constexpr uint32_t SBHF_EXIT_STILL_OCC_TIMEOUT_MS = 8000;
+static constexpr uint32_t SBHF_ENTRY_TO_MARKER_TIMEOUT_MS = 8000;
+static constexpr uint32_t SBHF_ENTRY_TO_GF_TIMEOUT_MS = 8000;
 
 // ============================================================
 
@@ -90,6 +92,9 @@ ShadowYardController::ShadowYardController(BlockController* bc)
   m_exitWasOccupiedAtStart(false),
   m_entrySawExitMarker(false),
   m_entrySawTargetGf(false),
+  m_entryMonitorActive(false),
+  m_entryStartMs(0),
+  m_entryAfterMarkerStartMs(0),
   m_s11StartPending(false),
   m_s11TriggerConsumed(false),
   m_errorActive(false),
@@ -128,6 +133,9 @@ void ShadowYardController::begin()
     m_exitWasOccupiedAtStart = false;
     m_entrySawExitMarker = false;
     m_entrySawTargetGf = false;
+    m_entryMonitorActive = false;
+    m_entryStartMs = 0;
+    m_entryAfterMarkerStartMs = 0;
     m_s11StartPending = false;
     m_s11TriggerConsumed = false;
 
@@ -232,12 +240,13 @@ bool ShadowYardController::isCurrentExitGleisOccupied() const
     return m_bc->isOccupied(blockId);
 }
 
-void ShadowYardController::triggerRouteError(uint8_t idx, const __FlashStringHelper* reason)
+void ShadowYardController::triggerSbhfEmergency(ErrorCause cause, uint8_t idx, uint8_t detailCode,
+                                               const __FlashStringHelper* category,
+                                               const __FlashStringHelper* reason)
 {
     if (m_errorActive)
         return;
 
-    // Falls ein Lauf bereits angefangen hatte, Resume-Checkpoint sichern.
     if (m_state != SBhfState::Idle && m_state != SBhfState::Error && m_currentGleis != 0)
     {
         m_resumePending = true;
@@ -250,17 +259,21 @@ void ShadowYardController::triggerRouteError(uint8_t idx, const __FlashStringHel
     m_exitPowerOn = false;
     m_exitStartMs = 0;
     m_exitWasOccupiedAtStart = false;
+    m_entryMonitorActive = false;
+    m_entryStartMs = 0;
+    m_entryAfterMarkerStartMs = 0;
 
-    // sichere Leistungslage
     g_power.setBlock5ToSBhf(false);
     g_power.setSbhfGleis(1, false);
     g_power.setSbhfGleis(2, false);
     g_power.setSbhfGleis(3, false);
 
-    DBG_PRINT(F("[SBHF] ROUTE ERROR: "));
+    DBG_PRINT(F("[SBHF] "));
+    DBG_PRINT(category);
+    DBG_PRINT(F(": "));
     DBG_PRINTLN(reason);
 
-    safetyErrorSet(SAFETY_ERR_SBH_ROUTE, idx);
+    safetyErrorSet(cause, idx, detailCode);
     safetySetEmergency(true);
 }
 
@@ -373,9 +386,20 @@ void ShadowYardController::onS12()
         return;
     }
 
-    if (m_state == SBhfState::EntryRunning && m_currentGleis == 1)
+    if (m_state == SBhfState::EntryRunning)
     {
-        m_entrySawExitMarker = true;
+        if (m_currentGleis == 1)
+        {
+            m_entrySawExitMarker = true;
+        }
+        else if (m_currentGleis >= 1 && m_currentGleis <= 3)
+        {
+            triggerSbhfEmergency(ERR_CAUSE_SBH_ENTRY_WRONG_TRACK,
+                                m_currentGleis,
+                                ERR_DETAIL_SBH_ENTRY_WRONG_TRACK_S12,
+                                F("ENTRY WRONG TRACK"),
+                                F("unexpected S12 while target is different"));
+        }
     }
 }
 
@@ -387,9 +411,20 @@ void ShadowYardController::onS13()
         return;
     }
 
-    if (m_state == SBhfState::EntryRunning && m_currentGleis == 2)
+    if (m_state == SBhfState::EntryRunning)
     {
-        m_entrySawExitMarker = true;
+        if (m_currentGleis == 2)
+        {
+            m_entrySawExitMarker = true;
+        }
+        else if (m_currentGleis >= 1 && m_currentGleis <= 3)
+        {
+            triggerSbhfEmergency(ERR_CAUSE_SBH_ENTRY_WRONG_TRACK,
+                                m_currentGleis,
+                                ERR_DETAIL_SBH_ENTRY_WRONG_TRACK_S13,
+                                F("ENTRY WRONG TRACK"),
+                                F("unexpected S13 while target is different"));
+        }
     }
 }
 
@@ -401,9 +436,20 @@ void ShadowYardController::onS14()
         return;
     }
 
-    if (m_state == SBhfState::EntryRunning && m_currentGleis == 3)
+    if (m_state == SBhfState::EntryRunning)
     {
-        m_entrySawExitMarker = true;
+        if (m_currentGleis == 3)
+        {
+            m_entrySawExitMarker = true;
+        }
+        else if (m_currentGleis >= 1 && m_currentGleis <= 3)
+        {
+            triggerSbhfEmergency(ERR_CAUSE_SBH_ENTRY_WRONG_TRACK,
+                                m_currentGleis,
+                                ERR_DETAIL_SBH_ENTRY_WRONG_TRACK_S14,
+                                F("ENTRY WRONG TRACK"),
+                                F("unexpected S14 while target is different"));
+        }
     }
 }
 
@@ -586,7 +632,11 @@ void ShadowYardController::update(uint32_t nowMs)
                 isInboundTargetOccupied(inboundTarget) &&
                 (digitalRead(PIN_RELAY_BLOCK5_NACH_SBH) == LOW))
             {
-                triggerRouteError(inboundTarget, F("Block5->SBHF active while inbound target occupied"));
+                triggerSbhfEmergency(ERR_CAUSE_SBH_CONTROLLER_FAULT,
+                                     inboundTarget,
+                                     ERR_DETAIL_SBH_CTRL_TARGET_OCC_POWERED,
+                                     F("CTRL FAULT"),
+                                     F("Block5->SBHF active while inbound target occupied"));
                 break;
             }
 
@@ -613,7 +663,11 @@ void ShadowYardController::update(uint32_t nowMs)
             {
                 if (m_currentGleis < 1 || m_currentGleis > 3)
                 {
-                    triggerRouteError(0, F("invalid current gleis in ExitRunning"));
+                    triggerSbhfEmergency(ERR_CAUSE_SBH_CONTROLLER_FAULT,
+                                         0,
+                                         ERR_DETAIL_SBH_CTRL_INVALID_EXIT_GLEIS,
+                                         F("CTRL FAULT"),
+                                         F("invalid current gleis in ExitRunning"));
                     break;
                 }
 
@@ -634,8 +688,11 @@ void ShadowYardController::update(uint32_t nowMs)
                     m_exitStartMs != 0 &&
                     (nowMs - m_exitStartMs) >= SBHF_EXIT_STILL_OCC_TIMEOUT_MS)
                 {
-                    triggerRouteError(
+                    triggerSbhfEmergency(
+                        ERR_CAUSE_SBH_EXIT_TIMEOUT,
                         m_currentGleis,
+                        ERR_DETAIL_NONE,
+                        F("EXIT TIMEOUT"),
                         F("active SBHF exit still occupied after 8s")
                     );
                 }
@@ -654,6 +711,9 @@ void ShadowYardController::update(uint32_t nowMs)
                     m_exitWasOccupiedAtStart = false;
                     m_entrySawExitMarker = false;
                     m_entrySawTargetGf = false;
+                    m_entryMonitorActive = false;
+                    m_entryStartMs = 0;
+                    m_entryAfterMarkerStartMs = 0;
                     m_state = SBhfState::EntryRunning;
                 }
             }
@@ -684,20 +744,59 @@ void ShadowYardController::update(uint32_t nowMs)
             {
                 m_entrySawExitMarker = false;
                 m_entrySawTargetGf = false;
+                m_entryMonitorActive = false;
+                m_entryStartMs = 0;
+                m_entryAfterMarkerStartMs = 0;
                 m_state = SBhfState::EntryRunning;
             }
             break;
         }
 
         case SBhfState::EntryRunning:
+            {
+            const bool entryPowerActive = g_power.isBlock5ToSBhfActive();
+            const bool block5Occupied = m_bc && m_bc->isOccupied(5);
+
+            if (!m_entryMonitorActive && entryPowerActive && block5Occupied)
+            {
+                m_entryMonitorActive = true;
+                m_entryStartMs = nowMs;
+                m_entryAfterMarkerStartMs = 0;
+            }
+
             if (m_currentGleis >= 1 && m_currentGleis <= 3 &&
                 isEntryTargetContactOccupied(m_currentGleis))
             {
                 m_entrySawTargetGf = true;
             }
 
-            // Ende der Einfahrt erst dann, wenn der zugehörige S-Kontakt
-            // (S12/S13/S14) UND der Zielkontakt GF1/GF2/GF3 erreicht wurden.
+            if (m_entryMonitorActive && !m_entrySawExitMarker && m_entryStartMs != 0 &&
+                (nowMs - m_entryStartMs) >= SBHF_ENTRY_TO_MARKER_TIMEOUT_MS)
+            {
+                triggerSbhfEmergency(ERR_CAUSE_SBH_ENTRY_TIMEOUT,
+                                     m_currentGleis,
+                                     ERR_DETAIL_SBH_ENTRY_TIMEOUT_WAIT_S,
+                                     F("ENTRY TIMEOUT"),
+                                     F("timeout waiting for S12/S13/S14 during entry"));
+                break;
+            }
+
+            if (m_entrySawExitMarker && m_entryAfterMarkerStartMs == 0)
+            {
+                m_entryAfterMarkerStartMs = nowMs;
+            }
+
+            if (m_entrySawExitMarker && !m_entrySawTargetGf && m_entryAfterMarkerStartMs != 0 &&
+                (nowMs - m_entryAfterMarkerStartMs) >= SBHF_ENTRY_TO_GF_TIMEOUT_MS)
+            {
+                triggerSbhfEmergency(ERR_CAUSE_SBH_ENTRY_TIMEOUT,
+                                     m_currentGleis,
+                                     ERR_DETAIL_SBH_ENTRY_TIMEOUT_WAIT_GF,
+                                     F("ENTRY TIMEOUT"),
+                                     F("timeout waiting for GF1/GF2/GF3 during entry"));
+                break;
+            }
+
             if (m_currentGleis >= 1 && m_currentGleis <= 3 &&
                 m_entrySawExitMarker &&
                 m_entrySawTargetGf)
@@ -706,6 +805,9 @@ void ShadowYardController::update(uint32_t nowMs)
                 m_targetFreeSinceMs = 0;
                 m_entrySawExitMarker = false;
                 m_entrySawTargetGf = false;
+                m_entryMonitorActive = false;
+                m_entryStartMs = 0;
+                m_entryAfterMarkerStartMs = 0;
                 m_cycleNeedsExitFirst = false;
                 m_currentGleis = 0;
                 m_s11StartPending = false;
@@ -713,6 +815,7 @@ void ShadowYardController::update(uint32_t nowMs)
                 m_state = SBhfState::Idle;
             }
             break;
+        }
 
         case SBhfState::Error:
             break;
@@ -1058,7 +1161,7 @@ void ShadowYardController::triggerHardError(uint8_t weicheId)
     setWarningForWeiche(weicheId);
 
     // 🔴 Fehler: SBHF-Weiche (W12/W13 sicherheitskritisch)
-    safetyErrorSet(SAFETY_ERR_SBH_WEICHE, weicheId);
+    safetyErrorSet(ERR_CAUSE_SBH_WEICHE, weicheId, ERR_DETAIL_NONE);
 
     safetySetEmergency(true);
 }
@@ -1095,6 +1198,9 @@ void ShadowYardController::resetError()
     m_exitWasOccupiedAtStart = false;
     m_entrySawExitMarker = false;
     m_entrySawTargetGf = false;
+    m_entryMonitorActive = false;
+    m_entryStartMs = 0;
+    m_entryAfterMarkerStartMs = 0;
     m_s11StartPending = false;
     m_s11TriggerConsumed = false;
     g_power.setBlock5ToSBhf(false);

@@ -126,10 +126,12 @@ void mega2DebugDump()
 
     const SafetyErrorInfo& err = safetyErrorGet();
     (void)err;
-    DBG_PRINT(F("SafetyErr type="));
-    DBG_PRINT((uint8_t)err.type);
+    DBG_PRINT(F("SafetyErr cause="));
+    DBG_PRINT((uint8_t)err.cause);
     DBG_PRINT(F(" idx="));
-    DBG_PRINTLN(err.index);
+    DBG_PRINT(err.index);
+    DBG_PRINT(F(" detail="));
+    DBG_PRINTLN(err.detailCode);
 
     // -------- STOPZONE / REVERSE-ENTRY DEBUG --------
     DBG_PRINT(F("StopzoneActive="));

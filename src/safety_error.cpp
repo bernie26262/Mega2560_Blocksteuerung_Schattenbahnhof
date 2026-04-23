@@ -1,17 +1,19 @@
 #include "safety_error.h"
 
-static SafetyErrorInfo g_error = { SAFETY_ERR_NONE, 0 };
+static SafetyErrorInfo g_error = { ERR_CAUSE_NONE, 0, ERR_DETAIL_NONE };
 
-void safetyErrorSet(SafetyErrorType type, uint8_t index)
+void safetyErrorSet(ErrorCause cause, uint8_t index, uint8_t detailCode)
 {
-    g_error.type  = type;
+    g_error.cause = cause;
     g_error.index = index;
+    g_error.detailCode = detailCode;
 }
 
 void safetyErrorClear()
 {
-    g_error.type  = SAFETY_ERR_NONE;
+    g_error.cause = ERR_CAUSE_NONE;
     g_error.index = 0;
+    g_error.detailCode = ERR_DETAIL_NONE;
 }
 
 const SafetyErrorInfo& safetyErrorGet()
@@ -21,5 +23,5 @@ const SafetyErrorInfo& safetyErrorGet()
 
 bool safetyErrorActive()
 {
-    return g_error.type != SAFETY_ERR_NONE;
+    return g_error.cause != ERR_CAUSE_NONE;
 }

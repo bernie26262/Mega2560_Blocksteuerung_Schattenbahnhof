@@ -144,8 +144,10 @@ void buildMega2SystemStatus(SystemStatus& out)
     // SAFETY ERROR DETAILS
     // -----------------------------
     const SafetyErrorInfo& err = safetyErrorGet();
-    out.safetyErrorType  = static_cast<uint8_t>(err.type);
-    out.safetyErrorIndex = err.index;
+    out.errorCause      = static_cast<uint8_t>(err.cause);
+    out.errorIndex      = err.index;
+    out.errorDetailCode = err.detailCode;
+    out.reservedErr     = 0;
 
     // -----------------------------
     // BLOCKS
