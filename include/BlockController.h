@@ -23,11 +23,23 @@ public:
 
     void startGrantFreeze(uint32_t nowMs);
     bool isGrantFreezeActive(uint32_t nowMs) const;
+    void startGrantFreezeTop(uint32_t nowMs);
+    void startGrantFreezeBottom(uint32_t nowMs);
+    bool isGrantFreezeTopActive(uint32_t nowMs) const;
+    bool isGrantFreezeBottomActive(uint32_t nowMs) const;
 
     void setPowerUnavailable(bool unavailable);
     void startPowerRecoveryBlock(uint32_t nowMs);
     bool isPowerRecoveryBlockActive(uint32_t nowMs) const;
     bool isEntrySuppressedByPower(uint32_t nowMs) const;
+    void setPowerUnavailableTop(bool unavailable);
+    void setPowerUnavailableBottom(bool unavailable);
+    void startPowerRecoveryBlockTop(uint32_t nowMs);
+    void startPowerRecoveryBlockBottom(uint32_t nowMs);
+    bool isPowerRecoveryBlockTopActive(uint32_t nowMs) const;
+    bool isPowerRecoveryBlockBottomActive(uint32_t nowMs) const;
+    bool isEntrySuppressedByPower(uint8_t fromBlock, uint8_t toBlock, uint32_t nowMs) const;
+    bool isLowerPathSuppressed(uint32_t nowMs) const;
 
     // Einfahrt in Block erlaubt? (hilft dem SBHF)
     bool canEnter(uint8_t fromBlock, uint8_t toBlock) const;
@@ -60,11 +72,17 @@ private:
     bool     m_stromActive[16]   = {false};
 
     // Freeze / Cache
-    uint32_t m_grantFreezeUntilMs = 0;
+    static bool routeUsesTopTrafo(uint8_t fromBlock, uint8_t toBlock);
+    static bool routeUsesBottomTrafo(uint8_t fromBlock, uint8_t toBlock);
+
+    uint32_t m_grantFreezeTopUntilMs = 0;
+    uint32_t m_grantFreezeBottomUntilMs = 0;
     bool     m_targetFreeCache[16] = {false};
 
-    bool     m_powerUnavailable = false;
-    uint32_t m_powerRecoveryBlockUntilMs = 0;
+    bool     m_powerTopUnavailable = false;
+    bool     m_powerBottomUnavailable = false;
+    uint32_t m_powerRecoveryTopUntilMs = 0;
+    uint32_t m_powerRecoveryBottomUntilMs = 0;
 
 #if MEGA2_DEBUG
     bool     m_dbgActive[16]     = {false};

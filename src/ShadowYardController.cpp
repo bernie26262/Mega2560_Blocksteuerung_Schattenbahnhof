@@ -279,7 +279,7 @@ void ShadowYardController::triggerSbhfEmergency(ErrorCause cause, uint8_t idx, u
 
 bool ShadowYardController::isPowerTransitionBlocked(uint32_t nowMs) const
 {
-    return m_bc && m_bc->isEntrySuppressedByPower(nowMs);
+    return m_bc && m_bc->isLowerPathSuppressed(nowMs);
 }
 
 void ShadowYardController::forceSafePowerOffForPowerTransition()
@@ -292,11 +292,39 @@ void ShadowYardController::forceSafePowerOffForPowerTransition()
     // Power-Transition bedeutet nur: Leistungspfade sicher AUS.
     // Der laufende SBHF-Zyklus wird NICHT auf Idle zurückgesetzt,
     // sondern nach stabiler Power-Lage an derselben Stelle fortgesetzt.
-    // Für ExitRunning wird der aktive Fahrspannungsabschnitt pausiert.
+    //
+    // Wichtig: Während Trafo unten AUS / Recovery dürfen die SBHF-Timeouts
+    // nicht weiterlaufen. Sonst entsteht eine Emergency, obwohl der Zug
+    // wegen fehlender Fahrspannung gar nicht fahren konnte.
+
+    // ExitRunning: aktiven Fahrspannungsabschnitt pausieren. Nach Recovery
+    // wird m_exitPowerOn=false erkannt, der Pfad wieder eingeschaltet und
+    // m_exitStartMs ab Resume-Zeitpunkt neu gesetzt.
     if (m_state == SBhfState::ExitRunning && m_exitPowerOn)
     {
         m_exitPowerOn = false;
-        m_exitStartMs = 0;   // Timeout pausieren; nach Recovery neu starten
+        m_exitStartMs = 0;
+    }
+
+    // EntryRunning: Block5->SBHF wurde oben sicher ausgeschaltet.
+    // Die neue Entry-Timeout-Regel braucht dieselbe Power-Pause-Behandlung
+    // wie ExitRunning:
+    //   - vor S12/S13/S14: 8s-Zähler bis Marker komplett neu starten
+    //   - nach S12/S13/S14: 8s-Zähler bis GF1/GF2/GF3 neu starten
+    // Bereits gesehene Kontakte bleiben erhalten, damit der Zyklus fachlich
+    // an derselben Stelle weiterläuft.
+    if (m_state == SBhfState::EntryRunning)
+    {
+        if (!m_entrySawExitMarker)
+        {
+            m_entryMonitorActive = false;
+            m_entryStartMs = 0;
+            m_entryAfterMarkerStartMs = 0;
+        }
+        else if (!m_entrySawTargetGf)
+        {
+            m_entryAfterMarkerStartMs = 0;
+        }
     }
 }
 

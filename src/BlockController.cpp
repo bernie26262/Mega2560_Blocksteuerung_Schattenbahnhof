@@ -58,59 +58,189 @@ BlockController::BlockController(Block** blocks, uint8_t count)
 {
 }
 
+static bool isTopRoute(uint8_t fromBlock, uint8_t toBlock)
+{
+    return (fromBlock == 4 && toBlock == 1) ||
+           (fromBlock == 1 && toBlock == 2) ||
+           (fromBlock == 2 && toBlock == 3);
+}
+
+static bool isBottomRoute(uint8_t fromBlock, uint8_t toBlock)
+{
+    return (fromBlock == 3 && toBlock == 4) ||
+           (fromBlock == 4 && toBlock == 5) ||
+           (fromBlock == 5 && toBlock >= 7 && toBlock <= 9) ||
+           (fromBlock >= 7 && fromBlock <= 9 && toBlock == 6) ||
+           (fromBlock == 6 && toBlock == 4);
+}
+
+bool BlockController::routeUsesTopTrafo(uint8_t fromBlock, uint8_t toBlock)
+{
+    return isTopRoute(fromBlock, toBlock);
+}
+
+bool BlockController::routeUsesBottomTrafo(uint8_t fromBlock, uint8_t toBlock)
+{
+    return isBottomRoute(fromBlock, toBlock);
+}
+
 void BlockController::startGrantFreeze(uint32_t nowMs)
 {
-    const bool wasActive = isGrantFreezeActive(nowMs);
+    startGrantFreezeTop(nowMs);
+    startGrantFreezeBottom(nowMs);
+}
+
+void BlockController::startGrantFreezeTop(uint32_t nowMs)
+{
+    const bool wasActive = isGrantFreezeTopActive(nowMs);
     const uint32_t newUntil = nowMs + BlockController::GRANT_FREEZE_MS;
 
     if (!wasActive)
     {
-        Serial.print(F("[BLK] freeze start ("));
+        Serial.print(F("[BLK] freeze TOP start ("));
         Serial.print((unsigned long)BlockController::GRANT_FREEZE_MS);
         Serial.println(F(" ms)"));
     }
 
-    if (newUntil > m_grantFreezeUntilMs)
-        m_grantFreezeUntilMs = newUntil;
+    if (newUntil > m_grantFreezeTopUntilMs)
+        m_grantFreezeTopUntilMs = newUntil;
 }
 
-bool BlockController::isGrantFreezeActive(uint32_t nowMs) const { return nowMs < m_grantFreezeUntilMs; }
+void BlockController::startGrantFreezeBottom(uint32_t nowMs)
+{
+    const bool wasActive = isGrantFreezeBottomActive(nowMs);
+    const uint32_t newUntil = nowMs + BlockController::GRANT_FREEZE_MS;
+
+    if (!wasActive)
+    {
+        Serial.print(F("[BLK] freeze BOTTOM start ("));
+        Serial.print((unsigned long)BlockController::GRANT_FREEZE_MS);
+        Serial.println(F(" ms)"));
+    }
+
+    if (newUntil > m_grantFreezeBottomUntilMs)
+        m_grantFreezeBottomUntilMs = newUntil;
+}
+
+bool BlockController::isGrantFreezeActive(uint32_t nowMs) const
+{
+    return isGrantFreezeTopActive(nowMs) || isGrantFreezeBottomActive(nowMs);
+}
+
+bool BlockController::isGrantFreezeTopActive(uint32_t nowMs) const
+{
+    return nowMs < m_grantFreezeTopUntilMs;
+}
+
+bool BlockController::isGrantFreezeBottomActive(uint32_t nowMs) const
+{
+    return nowMs < m_grantFreezeBottomUntilMs;
+}
 
 bool BlockController::isPowerRecoveryBlockActive(uint32_t nowMs) const
 {
-    return nowMs < m_powerRecoveryBlockUntilMs;
+    return isPowerRecoveryBlockTopActive(nowMs) || isPowerRecoveryBlockBottomActive(nowMs);
+}
+
+bool BlockController::isPowerRecoveryBlockTopActive(uint32_t nowMs) const
+{
+    return nowMs < m_powerRecoveryTopUntilMs;
+}
+
+bool BlockController::isPowerRecoveryBlockBottomActive(uint32_t nowMs) const
+{
+    return nowMs < m_powerRecoveryBottomUntilMs;
 }
 
 bool BlockController::isEntrySuppressedByPower(uint32_t nowMs) const
 {
-    return m_powerUnavailable || isPowerRecoveryBlockActive(nowMs);
+    return isLowerPathSuppressed(nowMs) ||
+           m_powerTopUnavailable || isPowerRecoveryBlockTopActive(nowMs);
+}
+
+bool BlockController::isEntrySuppressedByPower(uint8_t fromBlock, uint8_t toBlock, uint32_t nowMs) const
+{
+    const bool topRoute = routeUsesTopTrafo(fromBlock, toBlock);
+    const bool bottomRoute = routeUsesBottomTrafo(fromBlock, toBlock);
+
+    if (topRoute && (m_powerTopUnavailable || isPowerRecoveryBlockTopActive(nowMs)))
+        return true;
+
+    if (bottomRoute && isLowerPathSuppressed(nowMs))
+        return true;
+
+    return false;
+}
+
+bool BlockController::isLowerPathSuppressed(uint32_t nowMs) const
+{
+    return m_powerBottomUnavailable || isPowerRecoveryBlockBottomActive(nowMs);
 }
 
 void BlockController::setPowerUnavailable(bool unavailable)
 {
-    if (m_powerUnavailable == unavailable)
+    setPowerUnavailableTop(unavailable);
+    setPowerUnavailableBottom(unavailable);
+}
+
+void BlockController::setPowerUnavailableTop(bool unavailable)
+{
+    if (m_powerTopUnavailable == unavailable)
         return;
 
-    m_powerUnavailable = unavailable;
+    m_powerTopUnavailable = unavailable;
 
-    Serial.print(F("[BLK] power "));
-    Serial.println(unavailable ? F("unavailable -> block all entries") : F("available"));
+    Serial.print(F("[BLK] power TOP "));
+    Serial.println(unavailable ? F("unavailable -> block top-path entries") : F("available"));
+}
+
+void BlockController::setPowerUnavailableBottom(bool unavailable)
+{
+    if (m_powerBottomUnavailable == unavailable)
+        return;
+
+    m_powerBottomUnavailable = unavailable;
+
+    Serial.print(F("[BLK] power BOTTOM "));
+    Serial.println(unavailable ? F("unavailable -> block bottom-path entries") : F("available"));
 }
 
 void BlockController::startPowerRecoveryBlock(uint32_t nowMs)
 {
-    const bool wasActive = isPowerRecoveryBlockActive(nowMs);
+    startPowerRecoveryBlockTop(nowMs);
+    startPowerRecoveryBlockBottom(nowMs);
+}
+
+void BlockController::startPowerRecoveryBlockTop(uint32_t nowMs)
+{
+    const bool wasActive = isPowerRecoveryBlockTopActive(nowMs);
     const uint32_t newUntil = nowMs + BlockController::POWER_RECOVERY_BLOCK_MS;
 
     if (!wasActive)
     {
-        Serial.print(F("[BLK] power recovery block start ("));
+        Serial.print(F("[BLK] power recovery TOP start ("));
         Serial.print((unsigned long)BlockController::POWER_RECOVERY_BLOCK_MS);
         Serial.println(F(" ms)"));
     }
 
-    if (newUntil > m_powerRecoveryBlockUntilMs)
-        m_powerRecoveryBlockUntilMs = newUntil;
+    if (newUntil > m_powerRecoveryTopUntilMs)
+        m_powerRecoveryTopUntilMs = newUntil;
+}
+
+void BlockController::startPowerRecoveryBlockBottom(uint32_t nowMs)
+{
+    const bool wasActive = isPowerRecoveryBlockBottomActive(nowMs);
+    const uint32_t newUntil = nowMs + BlockController::POWER_RECOVERY_BLOCK_MS;
+
+    if (!wasActive)
+    {
+        Serial.print(F("[BLK] power recovery BOTTOM start ("));
+        Serial.print((unsigned long)BlockController::POWER_RECOVERY_BLOCK_MS);
+        Serial.println(F(" ms)"));
+    }
+
+    if (newUntil > m_powerRecoveryBottomUntilMs)
+        m_powerRecoveryBottomUntilMs = newUntil;
 }
 
 void BlockController::update(uint32_t nowMs)
@@ -163,24 +293,53 @@ void BlockController::update(uint32_t nowMs)
 #endif
     }
     
-    const bool freezeActive = isGrantFreezeActive(nowMs);
+    const bool freezeTopActive = isGrantFreezeTopActive(nowMs);
+    const bool freezeBottomActive = isGrantFreezeBottomActive(nowMs);
 
-    if (!freezeActive && m_grantFreezeUntilMs != 0)
+    if (!freezeTopActive && m_grantFreezeTopUntilMs != 0)
     {
-        Serial.println(F("[BLK] freeze end"));
-        m_grantFreezeUntilMs = 0;
+        Serial.println(F("[BLK] freeze TOP end"));
+        m_grantFreezeTopUntilMs = 0;
     }
 
-    if (!isPowerRecoveryBlockActive(nowMs) && m_powerRecoveryBlockUntilMs != 0)
+    if (!freezeBottomActive && m_grantFreezeBottomUntilMs != 0)
     {
-        Serial.println(F("[BLK] power recovery block end"));
-        m_powerRecoveryBlockUntilMs = 0;
+        Serial.println(F("[BLK] freeze BOTTOM end"));
+        m_grantFreezeBottomUntilMs = 0;
     }
 
-    if (!freezeActive)
+    if (!isPowerRecoveryBlockTopActive(nowMs) && m_powerRecoveryTopUntilMs != 0)
     {
-        for (uint8_t id = 1; id <= m_count; ++id)
+        Serial.println(F("[BLK] power recovery TOP end"));
+        m_powerRecoveryTopUntilMs = 0;
+    }
+
+    if (!isPowerRecoveryBlockBottomActive(nowMs) && m_powerRecoveryBottomUntilMs != 0)
+    {
+        Serial.println(F("[BLK] power recovery BOTTOM end"));
+        m_powerRecoveryBottomUntilMs = 0;
+    }
+
+    if (!freezeTopActive)
+    {
+        const uint8_t topIds[] = {1, 2, 3};
+        for (uint8_t i = 0; i < (sizeof(topIds) / sizeof(topIds[0])); ++i)
         {
+            const uint8_t id = topIds[i];
+            if (id > m_count) continue;
+            Block* b = m_blocks ? m_blocks[id] : nullptr;
+            const bool occ = isOccupied(id);
+            m_targetFreeCache[id] = b ? b->isReallyFree(nowMs) : !occ;
+        }
+    }
+
+    if (!freezeBottomActive)
+    {
+        const uint8_t bottomIds[] = {4, 5, 6, 7, 8, 9};
+        for (uint8_t i = 0; i < (sizeof(bottomIds) / sizeof(bottomIds[0])); ++i)
+        {
+            const uint8_t id = bottomIds[i];
+            if (id > m_count) continue;
             Block* b = m_blocks ? m_blocks[id] : nullptr;
             const bool occ = isOccupied(id);
             m_targetFreeCache[id] = b ? b->isReallyFree(nowMs) : !occ;
@@ -331,7 +490,7 @@ bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
         return false;
 
     const uint32_t now = millis();
-    if (isEntrySuppressedByPower(now))
+    if (isEntrySuppressedByPower(fromBlock, toBlock, now))
     {
 #if MEGA2_DEBUG_BLOCK_GRANT
         logBgrantRateLimited(now,
@@ -382,7 +541,11 @@ bool BlockController::canEnter(uint8_t fromBlock, uint8_t toBlock) const
     // Normalbetrieb: Freigabe erst, wenn Block wirklich frei ist (Debounce/Delay)
     Block* b = m_blocks[toBlock];
     const bool occ = isOccupied(toBlock);
-    const bool freezeActive = isGrantFreezeActive(now);
+    const bool freezeActive = routeUsesTopTrafo(fromBlock, toBlock)
+                            ? isGrantFreezeTopActive(now)
+                            : (routeUsesBottomTrafo(fromBlock, toBlock)
+                                ? isGrantFreezeBottomActive(now)
+                                : false);
 
     const bool free = freezeActive
                     ? m_targetFreeCache[toBlock]

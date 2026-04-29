@@ -745,40 +745,50 @@ static void logBrelayChange(uint32_t now,
 static void updateTrafoPowerRecoveryBlock(uint32_t now)
 {
     static bool s_initialized = false;
-    static bool s_anyTrafoLowLatched = false;
+    static bool s_topLowLatched = false;
+    static bool s_bottomLowLatched = false;
 
     const float vOben  = g_trafoOben.rms();
     const float vUnten = g_trafoUnten.rms();
 
-    const bool anyLow = (vOben <= TRAFO_BLOCK_OFF_THRESHOLD_V) ||
-                        (vUnten <= TRAFO_BLOCK_OFF_THRESHOLD_V);
-    const bool bothRecovered = (vOben >= TRAFO_BLOCK_ON_THRESHOLD_V) &&
-                               (vUnten >= TRAFO_BLOCK_ON_THRESHOLD_V);
+    const bool topLow = (vOben <= TRAFO_BLOCK_OFF_THRESHOLD_V);
+    const bool bottomLow = (vUnten <= TRAFO_BLOCK_OFF_THRESHOLD_V);
+    const bool topRecovered = (vOben >= TRAFO_BLOCK_ON_THRESHOLD_V);
+    const bool bottomRecovered = (vUnten >= TRAFO_BLOCK_ON_THRESHOLD_V);
 
-    g_bc.setPowerUnavailable(anyLow);
+    g_bc.setPowerUnavailableTop(topLow);
+    g_bc.setPowerUnavailableBottom(bottomLow);
 
     if (!s_initialized)
     {
-        if (bothRecovered)
-        {
-            // Auch beim Systemstart mit bereits aktiven Trafos zunaechst sperren,
-            // bis Strom-/Belegterkennung stabil anlaufen konnte.
-            g_bc.startPowerRecoveryBlock(now);
-        }
+        // Auch beim Systemstart nur den jeweils aktiven Trafo-Pfad zunächst sperren,
+        // bis Strom-/Belegterkennung lokal stabil anlaufen konnte.
+        if (topRecovered)
+            g_bc.startPowerRecoveryBlockTop(now);
+        if (bottomRecovered)
+            g_bc.startPowerRecoveryBlockBottom(now);
 
         s_initialized = true;
     }
 
-    if (anyLow)
+    if (topLow)
     {
-        s_anyTrafoLowLatched = true;
-        return;
+        s_topLowLatched = true;
+    }
+    else if (s_topLowLatched && topRecovered)
+    {
+        g_bc.startPowerRecoveryBlockTop(now);
+        s_topLowLatched = false;
     }
 
-    if (s_anyTrafoLowLatched && bothRecovered)
+    if (bottomLow)
     {
-        g_bc.startPowerRecoveryBlock(now);
-        s_anyTrafoLowLatched = false;
+        s_bottomLowLatched = true;
+    }
+    else if (s_bottomLowLatched && bottomRecovered)
+    {
+        g_bc.startPowerRecoveryBlockBottom(now);
+        s_bottomLowLatched = false;
     }
 }
 
